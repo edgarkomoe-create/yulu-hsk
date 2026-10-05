@@ -1,6 +1,8 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import Studio from "./Studio.jsx";
+import Landing from "./Landing.jsx";
+import Onboarding from "./Onboarding.jsx";
 
 // ============================== FALLBACK GEMINI AUTOMATIQUE ==============================
 const GEMINI_MODELS = [
@@ -699,12 +701,11 @@ const CHARS = [
   { c: "国", p: "guó", m: "pays", n: 8, tip: "Le carré 囗 d'abord (extérieur), puis 玉 à l'intérieur, on ferme en bas — 先外后内再封口 ." },
 ];
 
-// ============================== PROGRESSION (XP, PARCOURS, SÉRIE) ==============================
-
+// ============================== PROGRESSION ==============================
 const STORE_KEY = "hsk1-campus-chinois-v1";
 const TONE_COLORS = ["#dc2626", "#ea580c", "#16a34a", "#2563eb"];
-
 const CATALOG_KEY = "hsk1-catalog-v1";
+
 function loadCustomCatalog() {
   try {
     const raw = JSON.parse(localStorage.getItem(CATALOG_KEY) || "{}");
@@ -740,15 +741,10 @@ const ADMIN_PIN = "2026";
 const FREE_AI_PER_DAY = 5;
 
 function getSettings() {
-  try {
-    return Object.assign({ aiFreePerDay: 5, billingOn: false }, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"));
-  } catch (e) {
-    return { aiFreePerDay: 5, billingOn: false };
-  }
+  try { return Object.assign({ aiFreePerDay: 5, billingOn: false }, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}")); }
+  catch (e) { return { aiFreePerDay: 5, billingOn: false }; }
 }
-function saveSettings(s) {
-  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) {}
-}
+function saveSettings(s) { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) {} }
 function noteMiss(question) {
   try {
     const m = JSON.parse(localStorage.getItem(MISSES_KEY) || "{}");
@@ -756,9 +752,7 @@ function noteMiss(question) {
     localStorage.setItem(MISSES_KEY, JSON.stringify(m));
   } catch (e) {}
 }
-function getMisses() {
-  try { return JSON.parse(localStorage.getItem(MISSES_KEY) || "{}"); } catch (e) { return {}; }
-}
+function getMisses() { try { return JSON.parse(localStorage.getItem(MISSES_KEY) || "{}"); } catch (e) { return {}; } }
 function recordPron(hanzi, score) {
   try {
     const h = JSON.parse(localStorage.getItem(PRON_KEY) || "{}");
@@ -775,15 +769,10 @@ function recordPron(hanzi, score) {
     return { tries: 1, best: score, last: score, first: score };
   }
 }
-function getPronHist() {
-  try { return JSON.parse(localStorage.getItem(PRON_KEY) || "{}"); } catch (e) { return {}; }
-}
+function getPronHist() { try { return JSON.parse(localStorage.getItem(PRON_KEY) || "{}"); } catch (e) { return {}; } }
 async function askGeminiJSON(prompt, apiKey) {
   return callGeminiWithFallback(
-    {
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.7 },
-    },
+    { contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7 } },
     apiKey,
     true
   );
@@ -813,15 +802,10 @@ const BADGES = [
   { id: "curieux", label: "Élève du professeur IA", icon: "🧑‍🏫", test: (p) => (p.aiCount || 0) >= 10 },
 ];
 
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
+function todayKey() { return new Date().toISOString().slice(0, 10); }
 
 function computeStreak(history) {
-  const keys = Object.keys(history)
-    .filter((k) => (history[k] || 0) > 0)
-    .sort()
-    .reverse();
+  const keys = Object.keys(history).filter((k) => (history[k] || 0) > 0).sort().reverse();
   if (!keys.length) return 0;
   const fmt = (d) => d.toISOString().slice(0, 10);
   const today = fmt(new Date());
@@ -858,20 +842,14 @@ function useProgress() {
   });
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORE_KEY, JSON.stringify(progress));
-    } catch (e) {}
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(progress)); } catch (e) {}
   }, [progress]);
 
   const addXp = (amount) => {
     if (amount <= 0) return;
     setProgress((p) => {
       const k = todayKey();
-      return {
-        ...p,
-        xp: p.xp + amount,
-        history: { ...p.history, [k]: (p.history[k] || 0) + amount },
-      };
+      return { ...p, xp: p.xp + amount, history: { ...p.history, [k]: (p.history[k] || 0) + amount } };
     });
   };
 
@@ -884,12 +862,7 @@ function useProgress() {
       const nodes = { ...p.nodes, [id]: { done: true, best: Math.max(prev.best || 0, pct || 0) } };
       const gain = isNew ? def.xp : Math.round(def.xp * 0.25);
       const k = todayKey();
-      return {
-        ...p,
-        xp: p.xp + gain,
-        history: { ...p.history, [k]: (p.history[k] || 0) + gain },
-        nodes,
-      };
+      return { ...p, xp: p.xp + gain, history: { ...p.history, [k]: (p.history[k] || 0) + gain }, nodes };
     });
   };
 
@@ -905,20 +878,12 @@ function useProgress() {
 
   const donateCoins = (amount) => {
     if ((progress.coins || 0) < amount) return;
-    setProgress((p) => ({
-      ...p,
-      coins: Math.max(0, (p.coins || 0) - amount),
-      pot: (p.pot || 0) + amount,
-    }));
+    setProgress((p) => ({ ...p, coins: Math.max(0, (p.coins || 0) - amount), pot: (p.pot || 0) + amount }));
   };
 
   const spendCoins = (amount) => {
     if ((progress.coins || 0) < amount) return false;
-    setProgress((p) => ({
-      ...p,
-      coins: Math.max(0, (p.coins || 0) - amount),
-      spent: (p.spent || 0) + amount,
-    }));
+    setProgress((p) => ({ ...p, coins: Math.max(0, (p.coins || 0) - amount), spent: (p.spent || 0) + amount }));
     return true;
   };
 
@@ -935,9 +900,7 @@ function useProgress() {
   };
 
   const setDonor = (v) => setProgress((p) => ({ ...p, donor: v }));
-
-  const addDonation = (d) =>
-    setProgress((p) => ({ ...p, donations: [...(p.donations || []), d] }));
+  const addDonation = (d) => setProgress((p) => ({ ...p, donations: [...(p.donations || []), d] }));
 
   const registerAI = () =>
     setProgress((p) => {
@@ -948,24 +911,10 @@ function useProgress() {
 
   const aiUsedToday = progress.ai && progress.ai.date === todayKey() ? progress.ai.count : 0;
 
-  return {
-    progress,
-    addXp,
-    completeNode,
-    setGoal,
-    addCoins,
-    donateCoins,
-    spendCoins,
-    buyAvatar,
-    setDonor,
-    addDonation,
-    registerAI,
-    aiUsedToday,
-  };
+  return { progress, addXp, completeNode, setGoal, addCoins, donateCoins, spendCoins, buyAvatar, setDonor, addDonation, registerAI, aiUsedToday };
 }
 
-// ============================== AUDIO v2 (PRO) ==============================
-
+// ============================== AUDIO v2 ==============================
 let _cachedVoice = null;
 let _voiceLoadPromise = null;
 
@@ -975,10 +924,7 @@ function loadVoices() {
     if (!synth) return resolve([]);
     const existing = synth.getVoices();
     if (existing.length) return resolve(existing);
-    const handler = () => {
-      synth.removeEventListener("voiceschanged", handler);
-      resolve(synth.getVoices());
-    };
+    const handler = () => { synth.removeEventListener("voiceschanged", handler); resolve(synth.getVoices()); };
     synth.addEventListener("voiceschanged", handler);
     setTimeout(() => resolve(synth.getVoices()), 1500);
   });
@@ -987,7 +933,6 @@ function loadVoices() {
 async function pickBestChineseVoice() {
   if (_cachedVoice) return _cachedVoice;
   if (_voiceLoadPromise) return _voiceLoadPromise;
-
   _voiceLoadPromise = (async () => {
     const voices = await loadVoices();
     if (!voices.length) return null;
@@ -1009,7 +954,6 @@ async function pickBestChineseVoice() {
     console.warn("⚠️ Aucune voix chinoise trouvée.");
     return null;
   })();
-
   return _voiceLoadPromise;
 }
 
@@ -1028,14 +972,10 @@ async function speak(text, rate) {
     u.pitch = 1.0;
     u.volume = 1.0;
     if (voice) u.voice = voice;
-    u.onerror = (e) => {
-      if (e.error && e.error !== "interrupted" && e.error !== "canceled") console.warn("TTS :", e.error);
-    };
+    u.onerror = (e) => { if (e.error && e.error !== "interrupted" && e.error !== "canceled") console.warn("TTS :", e.error); };
     synth.speak(u);
     return true;
-  } catch (e) {
-    return false;
-  }
+  } catch (e) { return false; }
 }
 
 function preloadVoices() {
@@ -1064,16 +1004,8 @@ function EcouterBtn({ text, slow, label }) {
     ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:border-amber-400"
     : "border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400";
   return (
-    <button
-      onClick={handleClick}
-      disabled={loading}
-      className={`${base} ${style} ${playing ? "ring-2 ring-offset-1 ring-red-300 animate-pulse" : ""}`}
-    >
-      {loading ? (
-        <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
-      ) : (
-        <span>{slow ? "🐢" : "🔊"}</span>
-      )}
+    <button onClick={handleClick} disabled={loading} className={`${base} ${style} ${playing ? "ring-2 ring-offset-1 ring-red-300 animate-pulse" : ""}`}>
+      {loading ? <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" /> : <span>{slow ? "🐢" : "🔊"}</span>}
       <span>{label || (slow ? "lent" : "écouter")}</span>
     </button>
   );
@@ -1085,28 +1017,15 @@ function VoiceDiagnostic() {
     const voices = await loadVoices();
     const zh = voices.filter((v) => v.lang && v.lang.toLowerCase().startsWith("zh"));
     const best = await pickBestChineseVoice();
-    setInfo({
-      total: voices.length,
-      chinese: zh.length,
-      best: best ? `${best.name} (${best.lang})` : null,
-      all: zh.map((v) => `${v.name} (${v.lang})`),
-    });
+    setInfo({ total: voices.length, chinese: zh.length, best: best ? `${best.name} (${best.lang})` : null });
   };
   return (
     <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-xs">
-      <button onClick={run} className="font-bold text-gray-700 hover:text-red-600">
-        🔍 Diagnostic vocal
-      </button>
+      <button onClick={run} className="font-bold text-gray-700 hover:text-red-600">🔍 Diagnostic vocal</button>
       {info && (
         <div className="mt-2 text-gray-600 space-y-1">
-          <div>
-            Voix totales : <b>{info.total}</b> · Voix chinoises : <b className={info.chinese > 0 ? "text-green-600" : "text-red-600"}>{info.chinese}</b>
-          </div>
-          {info.best ? (
-            <div className="text-green-700">✓ Meilleure voix : <b>{info.best}</b></div>
-          ) : (
-            <div className="text-red-600">✗ Aucune voix chinoise détectée.</div>
-          )}
+          <div>Voix totales : <b>{info.total}</b> · Voix chinoises : <b className={info.chinese > 0 ? "text-green-600" : "text-red-600"}>{info.chinese}</b></div>
+          {info.best && <div className="text-green-700">✓ Meilleure voix : <b>{info.best}</b></div>}
         </div>
       )}
     </div>
@@ -1122,8 +1041,7 @@ function shuffle(arr) {
   return a;
 }
 
-// ============================== COMPOSANTS COMMUNS ==============================
-
+// ============================== NAV ==============================
 const NAV = [
   ["parcours", "🗺️ Parcours"],
   ["express", "⏱️ Express"],
@@ -1140,7 +1058,7 @@ const NAV = [
   ["don", "❤️ Fondation"],
 ];
 
-function Header({ active, onNav, progress }) {
+function Header({ active, onNav, progress, onHome }) {
   const level = Math.floor(progress.xp / 100) + 1;
   const into = progress.xp % 100;
   const streak = computeStreak(progress.history);
@@ -1149,7 +1067,13 @@ function Header({ active, onNav, progress }) {
   return (
     <div className="mb-5">
       <div className="flex flex-wrap items-center gap-3 mb-3">
-        <div className="w-12 h-12 rounded-full bg-red-600 flex items-center justify-center text-2xl shadow-md">{progress.avatar || "中"}</div>
+        <button
+          onClick={onHome}
+          className="w-12 h-12 rounded-full bg-red-600 flex items-center justify-center text-2xl shadow-md hover:scale-110 transition-transform"
+          title="Retour à l'accueil"
+        >
+          {progress.avatar || "中"}
+        </button>
         <div className="mr-auto">
           <h1 className="text-xl md:text-2xl font-bold text-gray-900">YǔLù 语路 — Campus chinois HSK</h1>
           <p className="text-xs md:text-sm text-gray-500">Chaque mot compte · chaque vie mérite un futur ❤️ VIE Foundation</p>
@@ -1190,15 +1114,7 @@ function Header({ active, onNav, progress }) {
       </div>
       <div className="flex flex-wrap gap-1.5 border-b border-gray-200 pb-px">
         {NAV.map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => onNav(id)}
-            className={`px-3 py-2 rounded-t-lg font-medium text-xs md:text-sm transition-colors ${
-              active === id ? "bg-red-600 text-white shadow" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-            }`}
-          >
-            {label}
-          </button>
+          <button key={id} onClick={() => onNav(id)} className={`px-3 py-2 rounded-t-lg font-medium text-xs md:text-sm transition-colors ${active === id ? "bg-red-600 text-white shadow" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{label}</button>
         ))}
       </div>
     </div>
@@ -1209,25 +1125,10 @@ function LessonChips({ value, onChange, allLabel }) {
   return (
     <div className="flex flex-wrap gap-2 mb-5">
       {allLabel && (
-        <button
-          onClick={() => onChange("all")}
-          className={`px-4 py-2 rounded-full text-sm font-medium border ${
-            value === "all" ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-700 border-gray-300"
-          }`}
-        >
-          {allLabel}
-        </button>
+        <button onClick={() => onChange("all")} className={`px-4 py-2 rounded-full text-sm font-medium border ${value === "all" ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-700 border-gray-300"}`}>{allLabel}</button>
       )}
       {ALL_LESSONS.map((l) => (
-        <button
-          key={l.id}
-          onClick={() => onChange(l.id)}
-          className={`px-4 py-2 rounded-full text-sm font-medium border ${
-            value === l.id ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300"
-          }`}
-        >
-          {l.titre} · {l.zh}
-        </button>
+        <button key={l.id} onClick={() => onChange(l.id)} className={`px-4 py-2 rounded-full text-sm font-medium border ${value === l.id ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300"}`}>{l.titre} · {l.zh}</button>
       ))}
     </div>
   );
@@ -1236,17 +1137,12 @@ function LessonChips({ value, onChange, allLabel }) {
 function Fiche({ vocab, index }) {
   const [flipped, setFlipped] = useState(false);
   return (
-    <button
-      onClick={() => setFlipped(!flipped)}
-      className="text-left p-4 rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md hover:border-red-300 transition-all cursor-pointer"
-    >
+    <button onClick={() => setFlipped(!flipped)} className="text-left p-4 rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md hover:border-red-300 transition-all cursor-pointer">
       <div className="flex items-start justify-between">
         <div>
           <div className="text-2xl font-semibold text-gray-900">{vocab.hanzi}</div>
           <div className="text-sm text-red-600 font-medium mt-0.5">{vocab.pinyin}</div>
-          <div className={`text-sm text-gray-600 mt-1 transition-opacity ${flipped ? "opacity-0 h-0 overflow-hidden" : "opacity-100"}`}>
-            {vocab.fr}
-          </div>
+          <div className={`text-sm text-gray-600 mt-1 transition-opacity ${flipped ? "opacity-0 h-0 overflow-hidden" : "opacity-100"}`}>{vocab.fr}</div>
         </div>
         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-400">{index + 1}</span>
       </div>
@@ -1261,9 +1157,7 @@ function Fiches({ presetLesson, onReviewDone }) {
     <div>
       <LessonChips value={lessonId} onChange={setLessonId} />
       {onReviewDone && (
-        <button onClick={() => onReviewDone(100)} className="mb-4 w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow">
-          ✅ J'ai révisé cette leçon — valider (+5 XP)
-        </button>
+        <button onClick={() => onReviewDone(100)} className="mb-4 w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow">✅ J'ai révisé cette leçon — valider (+5 XP)</button>
       )}
       <div className="rounded-2xl bg-gradient-to-r from-red-600 to-orange-500 p-6 mb-6 shadow">
         <div className="text-white">
@@ -1278,9 +1172,7 @@ function Fiches({ presetLesson, onReviewDone }) {
             {s.titre}
           </h3>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {s.vocab.map((v, i) => (
-              <Fiche key={v.hanzi + i} vocab={v} index={i} />
-            ))}
+            {s.vocab.map((v, i) => (<Fiche key={v.hanzi + i} vocab={v} index={i} />))}
           </div>
         </div>
       ))}
@@ -1330,11 +1222,7 @@ function Quiz({ presetLesson, onDone }) {
 
   const start = () => {
     setQuestions(shuffle(pool).slice(0, Math.min(pool.length, 10)));
-    setCurrent(0);
-    setSelected(null);
-    setScore(0);
-    setWrong([]);
-    setMode("play");
+    setCurrent(0); setSelected(null); setScore(0); setWrong([]); setMode("play");
   };
 
   useEffect(() => {
@@ -1345,29 +1233,21 @@ function Quiz({ presetLesson, onDone }) {
     if (selected !== null) return;
     setSelected(i);
     if (i === questions[current].answer) setScore((s) => s + 1);
-    else {
-      setWrong((w) => [...w, questions[current]]);
-      noteMiss(questions[current].question);
-    }
+    else { setWrong((w) => [...w, questions[current]]); noteMiss(questions[current].question); }
   };
 
   const next = () => {
     if (current + 1 >= questions.length) setMode("done");
-    else {
-      setCurrent((c) => c + 1);
-      setSelected(null);
-    }
+    else { setCurrent((c) => c + 1); setSelected(null); }
   };
 
   if (mode === "setup") {
     return (
       <div className="max-w-lg mx-auto p-6 rounded-2xl border border-gray-200 bg-white shadow">
         <h3 className="text-xl font-bold text-gray-900 mb-1">Choisis ta leçon</h3>
-        <p className="text-sm text-gray-500 mb-4">10 questions au hasard · {ALL_QUIZ.length} questions en banque</p>
+        <p className="text-sm text-gray-500 mb-4">10 questions au hasard · {ALL_QUIZ.length} questions</p>
         <LessonChips value={lessonFilter} onChange={setLessonFilter} allLabel="Toutes" />
-        <button onClick={start} className="w-full py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700 transition shadow">
-          Commencer le quiz 🎯
-        </button>
+        <button onClick={start} className="w-full py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700 shadow">Commencer le quiz 🎯</button>
       </div>
     );
   }
@@ -1396,9 +1276,7 @@ function Quiz({ presetLesson, onDone }) {
         )}
         <div className="flex flex-col gap-2">
           {onDone && (
-            <button onClick={() => onDone(pct)} className="w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow">
-              ✅ Valider cette étape (+XP)
-            </button>
+            <button onClick={() => onDone(pct)} className="w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow">✅ Valider cette étape (+XP)</button>
           )}
           <div className="flex gap-2">
             <button onClick={start} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700">Refaire 🔁</button>
@@ -1423,9 +1301,7 @@ function Quiz({ presetLesson, onDone }) {
         <div className="h-2 bg-red-600 rounded-full transition-all" style={{ width: `${((current + (answered ? 1 : 0)) / questions.length) * 100}%` }} />
       </div>
       <div className="p-6 rounded-2xl border border-gray-200 bg-white shadow">
-        <span className="inline-block text-xs font-bold px-2 py-0.5 rounded bg-red-100 text-red-700 mb-3">
-          Leçon {q.lesson} · {q.type}
-        </span>
+        <span className="inline-block text-xs font-bold px-2 py-0.5 rounded bg-red-100 text-red-700 mb-3">Leçon {q.lesson} · {q.type}</span>
         <div className="text-lg font-semibold text-gray-900 mb-5">{q.question}</div>
         <div className="space-y-2">
           {q.options.map((opt, i) => {
@@ -1435,18 +1311,12 @@ function Quiz({ presetLesson, onDone }) {
               else if (i === selected) cls = "border-red-400 bg-red-50";
               else cls = "border-gray-200 bg-white opacity-50";
             }
-            return (
-              <button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}>
-                {opt}
-              </button>
-            );
+            return (<button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}>{opt}</button>);
           })}
         </div>
         {answered && (
           <div className="mt-4">
-            <div className={`text-sm font-bold mb-2 ${correct ? "text-green-700" : "text-red-700"}`}>
-              {correct ? "✓ 对！Correct !" : `✗ 不对 — réponse : ${q.options[q.answer]}`}
-            </div>
+            <div className={`text-sm font-bold mb-2 ${correct ? "text-green-700" : "text-red-700"}`}>{correct ? "✓ 对！Correct !" : `✗ 不对 — réponse : ${q.options[q.answer]}`}</div>
             <button onClick={next} className="w-full py-3 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800 transition">
               {current + 1 >= questions.length ? "Voir le résultat →" : "Question suivante →"}
             </button>
@@ -1525,11 +1395,7 @@ function QuizEcoute({ presetLesson, onDone }) {
       const opts = shuffle([it, ...distract]);
       return { item: it, opts, answer: opts.findIndex((o) => o.hanzi === it.hanzi) };
     });
-    setQuestions(qs);
-    setCurrent(0);
-    setSelected(null);
-    setScore(0);
-    setMode("play");
+    setQuestions(qs); setCurrent(0); setSelected(null); setScore(0); setMode("play");
   };
 
   useEffect(() => {
@@ -1548,10 +1414,7 @@ function QuizEcoute({ presetLesson, onDone }) {
 
   const next = () => {
     if (current + 1 >= questions.length) setMode("done");
-    else {
-      setCurrent((c) => c + 1);
-      setSelected(null);
-    }
+    else { setCurrent((c) => c + 1); setSelected(null); }
   };
 
   if (mode === "setup") {
@@ -1573,9 +1436,7 @@ function QuizEcoute({ presetLesson, onDone }) {
         <p className="text-gray-600 mb-5">{pct >= 80 ? "听力很好！Excellente oreille ! 👏" : "继续听！Continue à écouter 🎧"}</p>
         <div className="flex flex-col gap-2">
           {onDone && (
-            <button onClick={() => onDone(pct)} className="w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow">
-              ✅ Valider cette étape (+XP)
-            </button>
+            <button onClick={() => onDone(pct)} className="w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow">✅ Valider cette étape (+XP)</button>
           )}
           <div className="flex gap-2">
             <button onClick={start} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700">Refaire 🔁</button>
@@ -1610,19 +1471,12 @@ function QuizEcoute({ presetLesson, onDone }) {
               else if (i === selected) cls = "border-red-400 bg-red-50";
               else cls = "border-gray-200 bg-white opacity-50";
             }
-            return (
-              <button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}>
-                <span className="text-lg">{opt.hanzi}</span>
-                <span className="text-red-600 ml-2">{opt.pinyin}</span>
-              </button>
-            );
+            return (<button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}><span className="text-lg">{opt.hanzi}</span><span className="text-red-600 ml-2">{opt.pinyin}</span></button>);
           })}
         </div>
         {answered && (
           <div className="mt-4">
-            <div className={`text-sm font-bold mb-2 ${correct ? "text-green-700" : "text-red-700"}`}>
-              {correct ? "✓ 对！Correct !" : "✗ La bonne réponse était en vert."}
-            </div>
+            <div className={`text-sm font-bold mb-2 ${correct ? "text-green-700" : "text-red-700"}`}>{correct ? "✓ 对！Correct !" : "✗ La bonne réponse était en vert."}</div>
             <button onClick={next} className="w-full py-3 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800">
               {current + 1 >= questions.length ? "Résultat →" : "Suivant →"}
             </button>
@@ -1639,18 +1493,8 @@ function Oral({ presetLesson, onDone }) {
   return (
     <div>
       <div className="flex gap-2 mb-6">
-        <button
-          onClick={() => setMode("repeter")}
-          className={`px-4 py-2 rounded-full text-sm font-medium border ${mode === "repeter" ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300"}`}
-        >
-          🔁 Écoute & répète
-        </button>
-        <button
-          onClick={() => setMode("quiz")}
-          className={`px-4 py-2 rounded-full text-sm font-medium border ${mode === "quiz" ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300"}`}
-        >
-          👂 Quiz d'écoute
-        </button>
+        <button onClick={() => setMode("repeter")} className={`px-4 py-2 rounded-full text-sm font-medium border ${mode === "repeter" ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300"}`}>🔁 Écoute & répète</button>
+        <button onClick={() => setMode("quiz")} className={`px-4 py-2 rounded-full text-sm font-medium border ${mode === "quiz" ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300"}`}>👂 Quiz d'écoute</button>
       </div>
       {mode === "repeter" ? <EcouteRepete /> : <QuizEcoute />}
       <p className="mt-8 text-xs text-gray-400 text-center">ℹ️ Le son utilise la voix chinoise de ton appareil.</p>
@@ -1667,10 +1511,7 @@ function QuizTons({ onDone }) {
 
   const start = () => {
     setQs(shuffle(TONE_QUIZ).slice(0, 10));
-    setCurrent(0);
-    setSelected(null);
-    setScore(0);
-    setStarted(true);
+    setCurrent(0); setSelected(null); setScore(0); setStarted(true);
   };
 
   useEffect(() => {
@@ -1678,11 +1519,7 @@ function QuizTons({ onDone }) {
   }, [started, current, qs]);
 
   if (!started) {
-    return (
-      <button onClick={start} className="px-5 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow">
-        S'entraîner aux tons 🎵
-      </button>
-    );
+    return (<button onClick={start} className="px-5 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 shadow">S'entraîner aux tons 🎵</button>);
   }
 
   if (current >= qs.length) {
@@ -1693,11 +1530,7 @@ function QuizTons({ onDone }) {
         <div className="text-sm text-gray-500 mb-3">{pct >= 80 ? "Très bonne oreille ! 🎵" : "Continue ! 💪"}</div>
         <div className="flex gap-2 justify-center">
           <button onClick={start} className="px-5 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700">Refaire 🔁</button>
-          {onDone && (
-            <button onClick={() => onDone(pct)} className="px-5 py-2.5 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700">
-              ✅ Valider (+XP)
-            </button>
-          )}
+          {onDone && (<button onClick={() => onDone(pct)} className="px-5 py-2.5 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700">✅ Valider (+XP)</button>)}
         </div>
       </div>
     );
@@ -1721,16 +1554,7 @@ function QuizTons({ onDone }) {
             else cls = "border-gray-200 bg-white opacity-50";
           }
           return (
-            <button key={i}
-              onClick={() => {
-                if (answered) return;
-                setSelected(i + 1);
-                if (i + 1 === q.t) setScore((s) => s + 1);
-              }}
-              className={`px-4 py-3 rounded-xl border text-sm font-bold transition-all ${cls}`}
-            >
-              {label}
-            </button>
+            <button key={i} onClick={() => { if (answered) return; setSelected(i + 1); if (i + 1 === q.t) setScore((s) => s + 1); }} className={`px-4 py-3 rounded-xl border text-sm font-bold transition-all ${cls}`}>{label}</button>
           );
         })}
       </div>
@@ -1738,9 +1562,7 @@ function QuizTons({ onDone }) {
         <div className="mt-4 text-center">
           <div className="text-2xl font-bold text-gray-900">{q.zh} <span className="text-red-600">{q.s}</span></div>
           <div className="text-xs text-gray-500 mb-3">{q.m} · ton {q.t}</div>
-          <button onClick={() => { setCurrent((c) => c + 1); setSelected(null); }} className="w-full py-2.5 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800 text-sm">
-            Suivant →
-          </button>
+          <button onClick={() => { setCurrent((c) => c + 1); setSelected(null); }} className="w-full py-2.5 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800 text-sm">Suivant →</button>
         </div>
       )}
     </div>
@@ -1757,9 +1579,7 @@ function Phonetique() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
         {TONS.map((t) => (
           <div key={t.t} className="p-4 rounded-xl border bg-white shadow-sm" style={{ borderColor: TONE_COLORS[t.t - 1] }}>
-            <div className="text-3xl font-bold" style={{ color: TONE_COLORS[t.t - 1] }}>
-              {t.pinyin} <span className="text-gray-400 text-xl">{t.shape}</span>
-            </div>
+            <div className="text-3xl font-bold" style={{ color: TONE_COLORS[t.t - 1] }}>{t.pinyin} <span className="text-gray-400 text-xl">{t.shape}</span></div>
             <div className="text-xl font-semibold text-gray-900 mt-1">{t.zh}</div>
             <div className="text-xs text-gray-500">{t.fr}</div>
             <div className="text-xs text-gray-600 mt-1 mb-2">{t.desc}</div>
@@ -1809,6 +1629,7 @@ function Phonetique() {
       <div className="mt-8 mb-4 max-w-lg mx-auto">
         <VoiceDiagnostic />
       </div>
+      <p className="text-xs text-gray-400 text-center">💡 Rappels : 3e ton + 3e ton → 2e ton + 3e ton · 不 bù devient bú devant 4e ton.</p>
     </div>
   );
 }
@@ -1816,6 +1637,7 @@ function Phonetique() {
 function TracePad({ ch }) {
   const canvasRef = useRef(null);
   const drawing = useRef(false);
+
   const paintBg = () => {
     const cv = canvasRef.current;
     if (!cv) return;
@@ -1835,22 +1657,29 @@ function TracePad({ ch }) {
     ctx.fillText(ch, w / 2, h / 2 + 10);
     ctx.strokeStyle = "#111827"; ctx.lineWidth = 4; ctx.lineCap = "round"; ctx.lineJoin = "round";
   };
+
   useEffect(() => { paintBg(); }, [ch]);
+
   const pos = (e) => {
-    const cv = canvasRef.current; const r = cv.getBoundingClientRect();
+    const cv = canvasRef.current;
+    const r = cv.getBoundingClientRect();
     return [(e.clientX - r.left) * (cv.width / r.width), (e.clientY - r.top) * (cv.height / r.height)];
   };
+
   const down = (e) => {
     drawing.current = true;
     const ctx = canvasRef.current.getContext("2d");
     const [x, y] = pos(e); ctx.beginPath(); ctx.moveTo(x, y);
   };
+
   const move = (e) => {
     if (!drawing.current) return;
     const ctx = canvasRef.current.getContext("2d");
     const [x, y] = pos(e); ctx.lineTo(x, y); ctx.stroke();
   };
+
   const up = () => { drawing.current = false; };
+
   return (
     <div className="text-center">
       <canvas ref={canvasRef} width={300} height={300}
@@ -1875,9 +1704,7 @@ function Ecrit({ onDone }) {
         </h3>
         <div className="grid grid-cols-6 gap-2 mb-5">
           {CHARS.map((c, i) => (
-            <button key={i} onClick={() => setChIdx(i)} className={`aspect-square rounded-lg border text-2xl font-semibold transition-all ${i === chIdx ? "bg-green-600 text-white border-green-600 shadow scale-105" : "bg-white text-gray-800 border-gray-300 hover:border-green-500"}`}>
-              {c.c}
-            </button>
+            <button key={i} onClick={() => setChIdx(i)} className={`aspect-square rounded-lg border text-2xl font-semibold transition-all ${i === chIdx ? "bg-green-600 text-white border-green-600 shadow scale-105" : "bg-white text-gray-800 border-gray-300 hover:border-green-500"}`}>{c.c}</button>
           ))}
         </div>
         <div className="p-4 rounded-xl border border-green-200 bg-green-50 text-sm text-gray-700 space-y-1.5">
@@ -1896,18 +1723,14 @@ function Ecrit({ onDone }) {
             <div className="text-red-600 font-bold">{ch.pinyin}</div>
             <div className="text-sm text-gray-500">{ch.m} · {ch.n} trait{ch.n > 1 ? "s" : ""}</div>
           </div>
-          <div className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-3 mb-4">
-            ✏️ <b>Ordre :</b> {ch.tip}
-          </div>
+          <div className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-3 mb-4">✏️ <b>Ordre :</b> {ch.tip}</div>
           <TracePad ch={ch.c} />
           <div className="flex gap-2 mt-3">
             <button onClick={() => setChIdx((i) => (i - 1 + CHARS.length) % CHARS.length)} className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-700 font-bold hover:bg-gray-200 text-sm">← Précédent</button>
             <button onClick={() => setChIdx((i) => (i + 1) % CHARS.length)} className="flex-1 py-2.5 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 text-sm">Suivant →</button>
           </div>
           {onDone && (
-            <button onClick={() => onDone(100)} className="mt-3 w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow text-sm">
-              ✅ Valider (+8 XP)
-            </button>
+            <button onClick={() => onDone(100)} className="mt-3 w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow text-sm">✅ Valider (+8 XP)</button>
           )}
         </div>
       </div>
@@ -1927,10 +1750,7 @@ function BossChallenge({ lesson, onDone }) {
   useEffect(() => {
     if (finished) return;
     const t = setInterval(() => {
-      setTimeLeft((s) => {
-        if (s <= 1) { setFinished(true); return 0; }
-        return s - 1;
-      });
+      setTimeLeft((s) => { if (s <= 1) { setFinished(true); return 0; } return s - 1; });
     }, 1000);
     return () => clearInterval(t);
   }, [finished]);
@@ -1994,18 +1814,12 @@ function BossChallenge({ lesson, onDone }) {
               else if (i === selected) cls = "border-red-400 bg-red-50";
               else cls = "border-gray-200 bg-white opacity-50";
             }
-            return (
-              <button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}>
-                {opt}
-              </button>
-            );
+            return (<button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}>{opt}</button>);
           })}
         </div>
         {answered && (
           <div className="mt-4">
-            <div className={`text-sm font-bold mb-2 ${selected === q.answer ? "text-green-700" : "text-red-700"}`}>
-              {selected === q.answer ? "✓ 对！" : `✗ Réponse : ${q.options[q.answer]}`}
-            </div>
+            <div className={`text-sm font-bold mb-2 ${selected === q.answer ? "text-green-700" : "text-red-700"}`}>{selected === q.answer ? "✓ 对！" : `✗ Réponse : ${q.options[q.answer]}`}</div>
             <button onClick={next} className="w-full py-3 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800">
               {current + 1 >= questions.length ? "Résultat →" : "Suivant →"}
             </button>
@@ -2038,18 +1852,12 @@ function DefiEclair({ unlockedLessons, addXp }) {
   const start = () => {
     if (pool.length < 4) return;
     setQuestions(shuffle(pool));
-    setCurrent(0);
-    setSelected(null);
-    setScore(0);
-    setTimeLeft(60);
+    setCurrent(0); setSelected(null); setScore(0); setTimeLeft(60);
     rewardRef.current = false;
     setStatus("play");
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
-      setTimeLeft((s) => {
-        if (s <= 1) { clearInterval(timerRef.current); setStatus("done"); return 0; }
-        return s - 1;
-      });
+      setTimeLeft((s) => { if (s <= 1) { clearInterval(timerRef.current); setStatus("done"); return 0; } return s - 1; });
     }, 1000);
   };
 
@@ -2108,9 +1916,7 @@ function DefiEclair({ unlockedLessons, addXp }) {
         <div className={`h-2 rounded-full ${timeLeft <= 10 ? "bg-red-500" : "bg-purple-600"}`} style={{ width: (timeLeft / 60) * 100 + "%" }} />
       </div>
       <div className="p-6 rounded-2xl border-2 border-purple-300 bg-white shadow">
-        <span className="inline-block text-xs font-bold px-2 py-0.5 rounded bg-purple-100 text-purple-700 mb-3">
-          Leçon {q.lesson} · {q.type}
-        </span>
+        <span className="inline-block text-xs font-bold px-2 py-0.5 rounded bg-purple-100 text-purple-700 mb-3">Leçon {q.lesson} · {q.type}</span>
         <div className="text-lg font-semibold text-gray-900 mb-5">{q.question}</div>
         <div className="space-y-2">
           {q.options.map((opt, i) => {
@@ -2120,11 +1926,7 @@ function DefiEclair({ unlockedLessons, addXp }) {
               else if (i === selected) cls = "border-red-400 bg-red-50";
               else cls = "border-gray-200 bg-white opacity-50";
             }
-            return (
-              <button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full text-left px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${cls}`}>
-                {opt}
-              </button>
-            );
+            return (<button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full text-left px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${cls}`}>{opt}</button>);
           })}
         </div>
       </div>
@@ -2141,7 +1943,7 @@ function NodeButton({ node, st, unlocked, isNext, onClick }) {
   else if (isNext) { circleCls = "bg-red-600 text-white border-red-700 ring-4 ring-red-200 animate-pulse"; }
   else { circleCls = "bg-red-50 text-red-600 border-red-300"; }
   return (
-    <button onClick={unlocked ? onClick : undefined} disabled={!unlocked} className="flex flex-col items-center gap-1 shrink-0 group" title={unlocked ? node.label + " (+" + node.xp + " XP)" : "Termine l'étape précédente"}>
+    <button onClick={unlocked ? onClick : undefined} disabled={!unlocked} className="flex flex-col items-center gap-1 shrink-0 group">
       <div className={`w-14 h-14 rounded-full border-2 flex items-center justify-center text-2xl shadow-sm transition-all ${circleCls} ${unlocked ? "hover:scale-110 cursor-pointer" : "cursor-not-allowed"}`}>
         {st && st.done ? "✅" : icon}
       </div>
@@ -2217,12 +2019,9 @@ function Parcours({ progress, onLaunch }) {
           </div>
         );
       })}
-      <p className="text-xs text-gray-400 text-center">💡 Suis le chemin dans l'ordre — chaque étape validée débloque la suivante.</p>
     </div>
   );
 }
-
-// ============================== CONSTANTES FINALES ==============================
 
 const PHRASES_DU_JOUR = [
   { zh: "我喝咖啡。", py: "Wǒ hē kāfēi.", fr: "Je bois du café." },
@@ -2255,16 +2054,16 @@ const AVATARS = [
 ];
 
 const PROF_TOPICS = [
-  { keys: ["的", "de ", "possess"], title: "La particule 的 (de)", body: "的 marque la possession, comme « de » ou « 's » en français : 我的书 wǒ de shū = mon livre. La structure : possesseur + 的 + objet." },
-  { keys: ["两", "二", "liang", "er ", " 2"], title: "两 ou 二 ?", body: "Deux chiffres : 二 èr et 两 liǎng. 两 se met devant un classificateur — 两个哥哥. 二 sert à compter : 2, 12, 22…" },
-  { keys: ["3e ton", "troisième ton", "sandhi", "ton 3", "ǎ"], title: "Le mystère du 3e ton", body: "Deux 3es tons qui se suivent → le premier devient 2e ton à l'oral : 你好 nǐ hǎo se prononce ní hǎo." },
+  { keys: ["的", "de ", "possess"], title: "La particule 的 (de)", body: "的 marque la possession : 我的书 wǒ de shū = mon livre. Structure : possesseur + 的 + objet." },
+  { keys: ["两", "二", "liang", "er ", " 2"], title: "两 ou 二 ?", body: "Deux chiffres : 二 èr et 两 liǎng. 两 se met devant un classificateur (两个哥哥). 二 sert à compter (2, 12, 22…)." },
+  { keys: ["3e ton", "troisième ton", "sandhi", "ton 3", "ǎ"], title: "Le mystère du 3e ton", body: "Deux 3es tons qui se suivent → le premier devient 2e ton : 你好 nǐ hǎo se prononce ní hǎo." },
   { keys: ["不", "bu ", "bú"], title: "Le cas de 不 bù", body: "不 est au 4e ton (bù), mais devant un autre 4e ton il passe au 2e ton : 不是 bú shì, 不客气 bú kèqi." },
   { keys: ["j q", "q x", "ju", "qu", "xu", "ü", "u "], title: "j, q, x + le ü déguisé", body: "Après j, q, x, la voyelle ü s'écrit u (mais se prononce ü !) : 去 qù, 居 jū." },
-  { keys: ["儿", "er ", "rétroflex"], title: "Le 儿 (er) rétroflexe", body: "哪儿 nǎr (où) : la finale 儿 fait recourber la langue vers le haut, comme un petit « r » américain." },
-  { keys: ["classificateur", "口", "个", "本", "measure"], title: "Les classificateurs 口 · 个 · 本", body: "个 gè = général (personnes, choses). 口 kǒu = famille (家有三口人). 本 běn = objets plats (livres)." },
+  { keys: ["儿", "er ", "rétroflex"], title: "Le 儿 (er) rétroflexe", body: "哪儿 nǎr (où) : la finale 儿 fait recourber la langue vers le haut." },
+  { keys: ["classificateur", "口", "个", "本", "measure"], title: "Les classificateurs 口 · 个 · 本", body: "个 gè = général. 口 kǒu = famille (家有三口人). 本 běn = objets plats (livres)." },
   { keys: ["几", "ji ", "combien"], title: "几 (jǐ) — combien ?", body: "几 jǐ = « combien » pour les petits nombres (moins de 10) : 你家有几口人？" },
-  { keys: ["有", "没", "yǒu", "avoir"], title: "有 yǒu et 没有 méiyǒu", body: "有 yǒu = avoir ; sa négation est 没有 (pas 不有 !) : 我没有哥哥 wǒ méiyǒu gēge." },
-  { keys: ["哪国人", "nationalité", "pays"], title: "Les nationalités", body: "Formule magique : pays + 人 rén = habitant. 中国 → 中国人. 科特迪瓦 → 科特迪瓦人 !" },
+  { keys: ["有", "没", "yǒu", "avoir"], title: "有 yǒu et 没有 méiyǒu", body: "有 yǒu = avoir ; négation 没有 : 我没有哥哥 wǒ méiyǒu gēge." },
+  { keys: ["哪国人", "nationalité", "pays"], title: "Les nationalités", body: "Formule : pays + 人 rén = habitant. 中国 → 中国人. 科特迪瓦 → 科特迪瓦人 !" },
   { keys: ["你好", "bonjour", "salut", "salutation"], title: "Bien saluer en chinois", body: "你好 nǐ hǎo = bonjour. 您好 nín hǎo = respect. 老师好 lǎoshī hǎo = bonjour professeur." },
 ];
 
@@ -2277,16 +2076,12 @@ function offlineProfAnswer(q) {
     for (const k of t.keys) if (s.includes(k.toLowerCase())) hits++;
     if (hits > bestHits) { best = t; bestHits = hits; }
   }
-  if (best) {
-    return "📘 **" + best.title + "**\n\n" + best.body + "\n\n_As-tu une autre question ? Essaie : 的 · 两/二 · les tons · j q x · classificateurs…_";
-  }
-  return "🧑‍🏫 Je suis le professeur hors-ligne : je connais par cœur tes leçons HSK 1 (的, 两/二, les tons, j/q/x + ü, 儿, classificateurs 口/个/本, 几, 有/没有, nationalités, salutations).\n\n💡 Pour des réponses illimitées, ajoute ta clé API Gemini (bouton ⚙️).";
+  if (best) return "📘 **" + best.title + "**\n\n" + best.body + "\n\n_As-tu une autre question ? Essaie : 的 · 两/二 · les tons · j q x · classificateurs…_";
+  return "🧑‍🏫 Je suis le professeur hors-ligne : je connais par cœur tes leçons HSK 1.\n\n💡 Pour des réponses illimitées, ajoute ta clé API Gemini (bouton ⚙️).";
 }
 
 const PROF_SYSTEM_PROMPT =
-  "Tu es 李老师 (Professeur Li), un professeur de chinois chaleureux et patient pour un débutant HSK 1 (niveau A1) vivant en Côte d'Ivoire, qui apprend le chinois sur l'application YǔLù 语路 et qui a un emploi du temps très chargé. Règles : réponds toujours en français ; utilise le chinois avec le pinyin pour chaque exemple ; reste concis (max 150 mots) ; encourage l'élève (加油 !) ; corrige ses erreurs avec bienveillance ; ne dépasse jamais le niveau HSK 1 sauf si l'élève demande explicitement plus.";
-
-// ============================== SESSION EXPRESS ==============================
+  "Tu es 李老师 (Professeur Li), un professeur de chinois chaleureux et patient pour un débutant HSK 1 (niveau A1) vivant en Côte d'Ivoire. Règles : réponds toujours en français ; utilise le chinois avec le pinyin pour chaque exemple ; reste concis (max 150 mots) ; encourage l'élève (加油 !) ; corrige ses erreurs avec bienveillance ; ne dépasse jamais le niveau HSK 1 sauf si l'élève demande explicitement plus.";
 
 function Express({ addXp, addCoins, unlockedLessons }) {
   const [phase, setPhase] = useState("intro");
@@ -2317,19 +2112,17 @@ function Express({ addXp, addCoins, unlockedLessons }) {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h3 className="text-lg font-bold text-gray-800">⏱️ Session express · 5 minutes</h3>
-          <p className="text-xs text-gray-500">4 mots, 3 questions, 1 phrase — et c'est gagné !</p>
+          <p className="text-xs text-gray-500">4 mots, 3 questions, 1 phrase</p>
         </div>
         <div className="px-3 py-1.5 rounded-xl bg-white border border-teal-300 font-mono font-bold text-teal-700">⏳ {fmt(seconds)}</div>
       </div>
-
       {phase === "intro" && (
         <div className="text-center py-6">
           <div className="text-5xl mb-3">⚡</div>
-          <p className="text-sm text-gray-600 mb-5 max-w-md mx-auto">Mini-session express : révision éclair + 3 questions + phrase du jour. <b>8 XP + 3 🪙</b></p>
+          <p className="text-sm text-gray-600 mb-5 max-w-md mx-auto">Mini-session express. <b>8 XP + 3 🪙</b></p>
           <button onClick={start} className="px-6 py-3 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-700 shadow">C'est parti ! →</button>
         </div>
       )}
-
       {phase === "cards" && cards[ci] && (
         <div className="text-center py-4">
           <div className="text-xs text-teal-600 mb-2">Mot {ci + 1} / {cards.length}</div>
@@ -2343,7 +2136,6 @@ function Express({ addXp, addCoins, unlockedLessons }) {
           </div>
         </div>
       )}
-
       {phase === "quiz" && questions[qi] && (
         <div className="py-2">
           <div className="text-xs text-teal-600 mb-2">Question {qi + 1} / {questions.length}</div>
@@ -2361,7 +2153,6 @@ function Express({ addXp, addCoins, unlockedLessons }) {
           )}
         </div>
       )}
-
       {phase === "phrase" && (
         <div className="text-center py-4">
           <div className="text-xs text-teal-600 mb-2">Phrase du jour</div>
@@ -2372,12 +2163,11 @@ function Express({ addXp, addCoins, unlockedLessons }) {
           <button onClick={finish} className="mt-5 px-6 py-2.5 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-700 shadow">Terminer 🎉</button>
         </div>
       )}
-
       {phase === "done" && (
         <div className="text-center py-6">
           <div className="text-5xl mb-3">🏆</div>
-          <div className="text-lg font-bold text-gray-900 mb-1">Session express terminée en {fmt(seconds)} !</div>
-          <div className="text-sm text-gray-600 mb-2">Score : {score}/{questions.length} · Mots révisés : {cards.length}</div>
+          <div className="text-lg font-bold text-gray-900 mb-1">Terminée en {fmt(seconds)} !</div>
+          <div className="text-sm text-gray-600 mb-2">Score : {score}/{questions.length}</div>
           <div className="text-sm font-bold text-teal-700">+8 XP · +3 🪙</div>
         </div>
       )}
@@ -2475,7 +2265,7 @@ function MatchGame({ onWin }) {
       {done ? (
         <div className="text-center py-5">
           <div className="text-4xl mb-2">🎉</div>
-          <div className="font-bold text-gray-800">Toutes les correspondances trouvées !</div>
+          <div className="font-bold text-gray-800">Trouvé !</div>
           <button onClick={() => { setLeft(null); setFound([]); setRound((r) => r + 1); }} className="mt-3 px-4 py-2 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600">Nouveau tour 🔄</button>
         </div>
       ) : (
@@ -2631,9 +2421,7 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
   const freeQuota = getSettings().aiFreePerDay || FREE_AI_PER_DAY;
   const limitReached = !progress.donor && aiUsedToday >= freeQuota;
 
-  const scrollToBottom = () => {
-    try { if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: "smooth" }); } catch (e) {}
-  };
+  const scrollToBottom = () => { try { if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: "smooth" }); } catch (e) {} };
 
   const send = async (textArg) => {
     const text = (textArg != null ? textArg : draft).trim();
@@ -2660,9 +2448,7 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
           false
         );
         if (replyText) reply = replyText;
-      } catch (e) {
-        reply = null;
-      }
+      } catch (e) { reply = null; }
     }
     if (!reply) reply = offlineProfAnswer(text);
 
@@ -2681,16 +2467,11 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
         <div className="flex-1">
           <div className="font-bold text-gray-900">李老师 · Professeur IA</div>
           <div className="text-xs text-gray-500">
-            {progress.donor ? (
-              <span className="text-rose-600 font-bold">❤️ Premium — illimité</span>
-            ) : (
-              <span>Restantes aujourd'hui : <b>{Math.max(0, freeQuota - aiUsedToday)} / {freeQuota}</b></span>
-            )}
+            {progress.donor ? (<span className="text-rose-600 font-bold">❤️ Premium — illimité</span>) : (<span>Restantes : <b>{Math.max(0, freeQuota - aiUsedToday)} / {freeQuota}</b></span>)}
           </div>
         </div>
         <button onClick={() => setShowKey((s) => !s)} className="px-3 py-1.5 rounded-full bg-white border border-indigo-300 text-xs font-medium text-indigo-700 hover:bg-indigo-100">⚙️ Clé API {key ? "✓" : ""}</button>
       </div>
-
       {showKey && (
         <div className="p-4 rounded-2xl border border-gray-300 bg-white text-sm">
           <p className="text-gray-600 mb-2">Colle ta clé API <b>Google Gemini</b> (gratuite sur aistudio.google.com).</p>
@@ -2700,33 +2481,23 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
           </div>
         </div>
       )}
-
       <div className="p-4 rounded-2xl border border-gray-200 bg-white shadow-sm space-y-3">
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
             <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-red-600 text-white rounded-br-sm" : "bg-gray-100 text-gray-800 rounded-bl-sm"}`}>{m.text}</div>
           </div>
         ))}
-        {busy && (
-          <div className="flex justify-start">
-            <div className="px-4 py-2.5 rounded-2xl bg-gray-100 text-sm text-gray-500">李老师 réfléchit… ✍️</div>
-          </div>
-        )}
+        {busy && (<div className="flex justify-start"><div className="px-4 py-2.5 rounded-2xl bg-gray-100 text-sm text-gray-500">李老师 réfléchit… ✍️</div></div>)}
         <div ref={chatEndRef} />
       </div>
-
       {limitReached && (
-        <div className="p-4 rounded-2xl border border-rose-300 bg-rose-50 text-sm text-rose-800">
-          🎓 Quota gratuit atteint ({freeQuota}/jour). Passe en <b>Premium ❤️</b> (onglet Fondation).
-        </div>
+        <div className="p-4 rounded-2xl border border-rose-300 bg-rose-50 text-sm text-rose-800">🎓 Quota gratuit atteint ({freeQuota}/jour). Passe en <b>Premium ❤️</b> (onglet Fondation).</div>
       )}
-
       <div className="flex flex-wrap gap-2">
         {quick.map((q) => (
           <button key={q} onClick={() => send(q)} disabled={busy || limitReached} className="px-3 py-1.5 rounded-full bg-white border border-gray-300 text-xs text-gray-600 hover:border-indigo-500 hover:text-indigo-600 disabled:opacity-40">{q}</button>
         ))}
       </div>
-
       <div className="flex gap-2">
         <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }} placeholder="Pose ta question…" className="flex-1 px-4 py-3 rounded-xl border border-gray-300 text-sm focus:border-indigo-500 outline-none" />
         <button onClick={() => send()} disabled={busy || limitReached || !draft.trim()} className="px-5 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-40">Envoyer →</button>
@@ -2746,10 +2517,7 @@ function Don({ progress, setDonor, addDonation, donateCoins }) {
   const setF = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const submit = () => {
-    if (!form.ref.trim() || !form.nom.trim() || !form.wave.trim() || !form.montant.trim()) {
-      setErr("Remplis tous les champs (WhatsApp optionnel).");
-      return;
-    }
+    if (!form.ref.trim() || !form.nom.trim() || !form.wave.trim() || !form.montant.trim()) { setErr("Remplis tous les champs (WhatsApp optionnel)."); return; }
     if (!(Number(form.montant) > 0)) { setErr("Le montant doit être positif."); return; }
     setErr("");
     addDonation({ ref: form.ref.trim(), nom: form.nom.trim(), wave: form.wave.trim(), whatsapp: form.whatsapp.trim(), montant: Number(form.montant), date: todayKey(), statut: "en attente de vérification" });
@@ -2763,9 +2531,8 @@ function Don({ progress, setDonor, addDonation, donateCoins }) {
         <div className="text-xs font-bold tracking-widest opacity-80 mb-1">🌍 VIE FOUNDATION</div>
         <h3 className="text-xl md:text-2xl font-bold mb-2">❤️ Sauvons Nos Vies</h3>
         <p className="text-sm opacity-90 mb-3 italic">« Chaque action compte. Chaque vie mérite un futur. »</p>
-        <p className="text-sm opacity-90">YǔLù 语路 est <b>gratuit</b>. Propulsé par <b>Kimatey Enterprise</b>, l'app reverse <b>15%</b> au programme <b>Sauvons Nos Vies</b>.</p>
+        <p className="text-sm opacity-90">YǔLù 语路 est <b>gratuit</b>. 15% reversés à <b>Sauvons Nos Vies</b>.</p>
       </div>
-
       <div className="p-5 rounded-2xl border border-rose-200 bg-white shadow-sm">
         <h4 className="font-bold text-gray-900 mb-3">🌟 Premium donateur</h4>
         <ul className="text-sm text-gray-600 space-y-1.5 mb-4">
@@ -2787,17 +2554,12 @@ function Don({ progress, setDonor, addDonation, donateCoins }) {
             <input value={form.montant} onChange={setF("montant")} placeholder="Montant (FCFA)" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
           </div>
           {err && <div className="text-xs text-red-600 mt-2">{err}</div>}
-          {!sent ? (
-            <button onClick={submit} className="mt-3 w-full py-2.5 rounded-xl bg-rose-600 text-white font-bold hover:bg-rose-700">✅ J'ai payé — activer premium</button>
-          ) : (
-            <div className="mt-3 p-3 rounded-xl bg-green-100 border border-green-400 text-sm text-green-800">❤️ Merci {form.nom} ! Ton don de <b>{form.montant} FCFA</b> est enregistré.</div>
-          )}
+          {!sent ? (<button onClick={submit} className="mt-3 w-full py-2.5 rounded-xl bg-rose-600 text-white font-bold hover:bg-rose-700">✅ J'ai payé — activer premium</button>) : (<div className="mt-3 p-3 rounded-xl bg-green-100 border border-green-400 text-sm text-green-800">❤️ Merci {form.nom} ! Ton don de <b>{form.montant} FCFA</b> est enregistré.</div>)}
         </div>
       </div>
-
       <div className="p-5 rounded-2xl border border-yellow-300 bg-yellow-50">
         <h4 className="font-bold text-gray-900 mb-1">🤝 Cagnotte collective</h4>
-        <p className="text-xs text-gray-500 mb-3">20% de chaque pièce gagnée va à la cagnotte solidaire.</p>
+        <p className="text-xs text-gray-500 mb-3">20% de chaque pièce va à la cagnotte.</p>
         <div className="flex items-center gap-4">
           <div className="text-center px-4 py-2 rounded-xl bg-white border border-yellow-300">
             <div className="text-2xl font-bold text-yellow-600">🤝 {progress.pot || 0}</div>
@@ -2868,20 +2630,12 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
         if (best >= 70) { addXp(3); addCoins(1); }
         else if (best >= 50) { addXp(1); }
       };
-      rec.onerror = (e) => {
-        console.warn("Erreur :", e.error);
-        setListening(false);
-        if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-          alert("🎙️ Autorise l'accès au micro dans les paramètres du navigateur.");
-        }
-      };
+      rec.onerror = (e) => { console.warn("Erreur :", e.error); setListening(false); };
       rec.onend = () => setListening(false);
       setResult(null);
       setListening(true);
       rec.start();
-    } catch (e) {
-      setListening(false);
-    }
+    } catch (e) { setListening(false); }
   };
 
   const nextWord = () => { setResult(null); setIdx((i) => (i + 1) % pool.length); };
@@ -2891,7 +2645,7 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
       <div className="p-6 rounded-2xl border border-amber-300 bg-amber-50 text-center">
         <div className="text-4xl mb-2">🎙️</div>
         <h3 className="font-bold text-gray-800 mb-1">Prononciation corrigée</h3>
-        <p className="text-sm text-gray-600">Nécessite <b>Chrome, Edge ou un Android récent</b>.</p>
+        <p className="text-sm text-gray-600">Nécessite <b>Chrome, Edge ou Android récent</b>.</p>
       </div>
     );
   }
@@ -2899,22 +2653,11 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
   const e = result ? result.entry : hist[target.hanzi];
   const stars = result ? (result.score >= 90 ? 3 : result.score >= 70 ? 2 : result.score >= 40 ? 1 : 0) : 0;
   const improvement = e && e.first != null && e.tries > 1 ? Math.round(e.last - e.first) : null;
-  const wordsDone = Object.keys(hist).length;
-  const avgBest = wordsDone ? Math.round(Object.values(hist).reduce((s, v) => s + v.best, 0) / wordsDone) : 0;
 
   return (
     <div className="space-y-4">
       <div className="p-5 rounded-2xl border border-green-200 bg-green-50">
-        <div className="flex items-center justify-between mb-2">
-          <div>
-            <h3 className="text-lg font-bold text-gray-800">🗣️ Prononce & sois corrigé</h3>
-            <p className="text-xs text-gray-500">Écoute, prononce, reçois ta note.</p>
-          </div>
-          <div className="text-right text-xs text-green-700">
-            <div className="font-bold">{wordsDone} mots travaillés</div>
-            <div>Meilleure moyenne : {avgBest}%</div>
-          </div>
-        </div>
+        <h3 className="text-lg font-bold text-gray-800 mb-2">🗣️ Prononce & sois corrigé</h3>
         <div className="flex flex-wrap gap-1.5 mb-4">
           {[["all", "Toutes mes leçons"], ...ALL_LESSONS.filter((l) => unlockedLessons.includes(l.id)).map((l) => [l.id, l.titre])].map(([id, label]) => (
             <button key={id} onClick={() => { setLessonFilter(id); setIdx(0); setResult(null); }} className={`px-3 py-1 rounded-full text-xs ${lessonFilter === id ? "bg-green-600 text-white" : "bg-white border border-gray-300 text-gray-600"}`}>{label}</button>
@@ -2949,9 +2692,7 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
                     : result.score >= 40 ? "🔍 Presque ! Réécoute le modèle lentement."
                     : "😅 Le mot entendu est très différent."}
                   {improvement != null && (
-                    <div className={`mt-1 font-bold ${improvement >= 0 ? "text-green-600" : "text-red-500"}`}>
-                      {improvement >= 0 ? "📈" : "📉"} {improvement >= 0 ? "+" : ""}{improvement}% depuis ta 1re tentative
-                    </div>
+                    <div className={`mt-1 font-bold ${improvement >= 0 ? "text-green-600" : "text-red-500"}`}>{improvement >= 0 ? "📈" : "📉"} {improvement >= 0 ? "+" : ""}{improvement}% depuis la 1re tentative</div>
                   )}
                 </div>
               </div>
@@ -3015,15 +2756,12 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
           <div className="text-xs opacity-70">Gère ton application</div>
         </div>
       </div>
-
       <div className="flex flex-wrap gap-1.5">
         {SECTIONS.map(([id, label]) => (
           <button key={id} onClick={() => setSection(id)} className={`px-3 py-2 rounded-xl text-xs md:text-sm font-medium ${section === id ? "bg-gray-900 text-white" : "bg-white border border-gray-300 text-gray-600 hover:border-gray-500"}`}>{label}</button>
         ))}
       </div>
-
       {toast && <div className="p-3 rounded-xl bg-gray-900 text-white text-sm font-bold text-center">{toast}</div>}
-
       {section === "studio" && (
         <Studio
           geminiKey={(() => { try { return localStorage.getItem(GEMINI_KEY_STORE) || ""; } catch (e) { return ""; } })()}
@@ -3060,7 +2798,6 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
           }}
         />
       )}
-
       {section === "facturation" && (
         <div className="p-5 rounded-2xl border border-gray-200 bg-white space-y-4">
           <h4 className="font-bold text-gray-900">💳 Facturation, limites & version</h4>
@@ -3088,14 +2825,11 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
           <div>
             <label className="text-sm font-bold text-gray-800">Objectif XP/jour</label>
             <div className="flex gap-2 mt-1">
-              {[20, 40, 60, 100].map((n) => (
-                <button key={n} onClick={() => setGoal(n)} className="px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm font-bold">{n}</button>
-              ))}
+              {[20, 40, 60, 100].map((n) => (<button key={n} onClick={() => setGoal(n)} className="px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm font-bold">{n}</button>))}
             </div>
           </div>
         </div>
       )}
-
       {section === "dons" && (
         <div className="p-5 rounded-2xl border border-gray-200 bg-white">
           <h4 className="font-bold text-gray-900 mb-1">🌊 Dons reçus (Wave)</h4>
@@ -3182,7 +2916,6 @@ function Progres({ progress, setGoal }) {
           </div>
         ))}
       </div>
-
       <div className="grid md:grid-cols-2 gap-4 mb-6">
         <div className="p-5 rounded-2xl border border-gray-200 bg-white shadow-sm">
           <h4 className="font-bold text-gray-800 mb-3">📈 Tes XP — 14 derniers jours</h4>
@@ -3216,7 +2949,6 @@ function Progres({ progress, setGoal }) {
           </div>
         </div>
       </div>
-
       <div className="p-5 rounded-2xl border border-gray-200 bg-white shadow-sm mb-6">
         <h4 className="font-bold text-gray-800 mb-3">🚩 Avancement par leçon</h4>
         <div className="space-y-3">
@@ -3236,7 +2968,6 @@ function Progres({ progress, setGoal }) {
           })}
         </div>
       </div>
-
       <div className="p-5 rounded-2xl border border-gray-200 bg-white shadow-sm mb-4">
         <h4 className="font-bold text-gray-800 mb-3">🏅 Badges</h4>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -3256,10 +2987,27 @@ function Progres({ progress, setGoal }) {
   );
 }
 
+// ============================== APP ==============================
+
 export default function App() {
   useEffect(() => { preloadVoices(); }, []);
 
   const { progress, addXp, completeNode, setGoal, addCoins, donateCoins, spendCoins, buyAvatar, setDonor, addDonation, registerAI, aiUsedToday } = useProgress();
+  const [appMode, setAppMode] = useState(() => {
+    try {
+      const raw = localStorage.getItem("hsk1-user-profile-v1");
+      if (raw) {
+        const profile = JSON.parse(raw);
+        if (profile.onboardedAt) return "app";
+      }
+      const progressRaw = localStorage.getItem("hsk1-campus-chinois-v1");
+      if (progressRaw) {
+        const p = JSON.parse(progressRaw);
+        if (p.xp > 0) return "app";
+      }
+    } catch (e) {}
+    return "landing";
+  });
   const [view, setView] = useState("parcours");
   const [nodeId, setNodeId] = useState(null);
   const [nodeLesson, setNodeLesson] = useState(null);
@@ -3288,9 +3036,38 @@ export default function App() {
     return arr;
   }, [progress.nodes]);
 
+  const goHome = () => {
+    if (window.confirm("Retourner à l'accueil ?\n\n(Tes XP et ta progression sont conservés)")) {
+      setAppMode("landing");
+    }
+  };
+
+  // ── Router Landing → Onboarding → App ──
+  if (appMode === "landing") {
+    return (
+      <Landing
+        progress={progress}
+        onStart={() => setAppMode("onboarding")}
+      />
+    );
+  }
+
+  if (appMode === "onboarding") {
+    return (
+      <Onboarding
+        onComplete={() => setAppMode("app")}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 p-4 md:p-8 max-w-5xl mx-auto font-sans">
-      <Header active={view} onNav={(v) => { setNodeId(null); setNodeLesson(null); setView(v); }} progress={progress} />
+      <Header
+        active={view}
+        onNav={(v) => { setNodeId(null); setNodeLesson(null); setView(v); }}
+        onHome={goHome}
+        progress={progress}
+      />
 
       {activeNode && (
         <div className="mb-5 p-3 rounded-xl bg-gray-900 text-white flex items-center justify-between shadow">
