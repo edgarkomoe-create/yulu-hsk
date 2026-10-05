@@ -652,7 +652,7 @@ const CHARS = [
 const STORE_KEY = "hsk1-campus-chinois-v1";
 const TONE_COLORS = ["#dc2626", "#ea580c", "#16a34a", "#2563eb"];
 
-// ---------- CATALOGUE ADMINISTRABLE (leçons & quiz ajoutés depuis l'espace admin) ----------
+// ---------- CATALOGUE ADMINISTRABLE ----------
 const CATALOG_KEY = "hsk1-catalog-v1";
 function loadCustomCatalog() {
   try {
@@ -661,16 +661,15 @@ function loadCustomCatalog() {
     const quiz = Array.isArray(raw.quiz) ? raw.quiz : [];
     const nextId = 6;
     lessons.forEach((l, i) => { if (!l.id) l.id = nextId + i; });
-    return { lessons, quiz };
+    return { lessons, quiz, vocab: raw.vocab || [] };
   } catch (e) {
-    return { lessons: [], quiz: [] };
+    return { lessons: [], quiz: [], vocab: [] };
   }
 }
 const CUSTOM_CATALOG = loadCustomCatalog();
 const ALL_LESSONS = [...LESSONS, ...CUSTOM_CATALOG.lessons];
 const ALL_QUIZ = [...QUIZ, ...CUSTOM_CATALOG.quiz];
 
-// Vocabulaire ajouté via l'espace admin (rattaché à une leçon existante)
 (CUSTOM_CATALOG.vocab || []).forEach((v) => {
   const les = ALL_LESSONS.find((l) => l.id === v.lesson);
   if (les) les.sections.push({ titre: "Vocabulaire (ajouté)", vocab: [{ hanzi: v.hanzi, pinyin: v.pinyin, fr: v.fr }] });
@@ -680,12 +679,15 @@ const ALL_VOCAB = ALL_LESSONS.flatMap((l) =>
   l.sections.flatMap((s) => s.vocab.map((v) => ({ ...v, lesson: l.id })))
 ).filter((v) => !v.hanzi.includes("……") && !v.hanzi.includes("/"));
 
-// ---------- RÉGLAGES & SUIVI (pour l'espace admin) ----------
+// ---------- RÉGLAGES & SUIVI ----------
 const SETTINGS_KEY = "hsk1-settings-v1";
 const MISSES_KEY = "hsk1-misses-v1";
 const PRON_KEY = "hsk1-pron-v1";
+const GEMINI_KEY_STORE = "hsk1-gemini-key";
+const WAVE_LINK_STORE = "hsk1-wave-link";
 const WAVE_DEFAULT_LINK = "https://pay.wave.com/m/M_ci_lPtTUkiLSpYn/c/ci/";
 const ADMIN_PIN = "2026";
+const FREE_AI_PER_DAY = 5;
 
 function getSettings() {
   try {
@@ -862,11 +864,10 @@ function useProgress() {
 
   const setGoal = (g) => setProgress((p) => ({ ...p, goal: g }));
 
-  // ---- Économie participative : pièces Sagesse 🪙 + cagnotte collective ----
   const addCoins = (amount) => {
     if (amount <= 0) return;
     setProgress((p) => {
-      const solidary = Math.ceil(amount / 5); // 20% vers la cagnotte de la communauté
+      const solidary = Math.ceil(amount / 5);
       return { ...p, coins: (p.coins || 0) + amount, pot: (p.pot || 0) + solidary };
     });
   };
@@ -932,35 +933,192 @@ function useProgress() {
   };
 }
 
-// ============================== AUDIO ==============================
+// ============================== AUDIO v2 (PRO) ==============================
 
-function speak(text, rate) {
+let _cachedVoice = null;
+let _voiceLoadPromise = null;
+let _voicesReady = false;
+
+function loadVoices() {
+  return new Promise((resolve) => {
+    const synth = typeof window !== "undefined" ? window.speechSynthesis : null;
+    if (!synth) return resolve([]);
+    const existing = synth.getVoices();
+    if (existing.length) {
+      _voicesReady = true;
+      return resolve(existing);
+    }
+    const handler = () => {
+      synth.removeEventListener("voiceschanged", handler);
+      _voicesReady = true;
+      resolve(synth.getVoices());
+    };
+    synth.addEventListener("voiceschanged", handler);
+    setTimeout(() => {
+      _voicesReady = true;
+      resolve(synth.getVoices());
+    }, 1500);
+  });
+}
+
+async function pickBestChineseVoice() {
+  if (_cachedVoice) return _cachedVoice;
+  if (_voiceLoadPromise) return _voiceLoadPromise;
+
+  _voiceLoadPromise = (async () => {
+    const voices = await loadVoices();
+    if (!voices.length) return null;
+
+    const priorities = [
+      (v) => v.lang === "zh-CN" && /Google/i.test(v.name),
+      (v) => v.lang === "zh-CN" && /Microsoft (Xiaoxiao|Yunxi|Xiaoyi|Huihui|Kangkang|Yaoyao)/i.test(v.name),
+      (v) => v.lang === "zh-CN" && /Ting-?Ting|Mei-?Jia|Sin-?ji|Li-?mu/i.test(v.name),
+      (v) => v.lang === "zh-CN" || v.lang === "zh_CN",
+      (v) => v.lang && v.lang.toLowerCase().startsWith("zh"),
+    ];
+
+    for (const test of priorities) {
+      const found = voices.find(test);
+      if (found) {
+        _cachedVoice = found;
+        console.log("🎙️ Voix chinoise sélectionnée :", found.name, "(", found.lang, ")");
+        return found;
+      }
+    }
+    console.warn("⚠️ Aucune voix chinoise trouvée. Voix disponibles :", voices.map((v) => `${v.name} (${v.lang})`));
+    return null;
+  })();
+
+  return _voiceLoadPromise;
+}
+
+async function speak(text, rate) {
   try {
-    const synth = window.speechSynthesis;
+    const synth = typeof window !== "undefined" ? window.speechSynthesis : null;
     if (!synth) return false;
+
+    const cleanText = String(text)
+      .replace(/……/g, "")
+      .replace(/[…]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!cleanText) return false;
+
     synth.cancel();
-    const u = new window.SpeechSynthesisUtterance(String(text).replace(/……/g, ""));
-    u.lang = "zh-CN";
-    u.rate = rate || 0.9;
+    await new Promise((r) => setTimeout(r, 60));
+
+    const voice = await pickBestChineseVoice();
+    const u = new SpeechSynthesisUtterance(cleanText);
+    u.lang = voice ? voice.lang : "zh-CN";
+    u.rate = rate != null ? rate : 0.85;
+    u.pitch = 1.0;
+    u.volume = 1.0;
+    if (voice) u.voice = voice;
+
+    u.onerror = (e) => {
+      if (e.error && e.error !== "interrupted" && e.error !== "canceled") {
+        console.warn("Erreur TTS :", e.error);
+      }
+    };
+
     synth.speak(u);
     return true;
   } catch (e) {
+    console.warn("speak() échec :", e);
     return false;
   }
 }
 
+function preloadVoices() {
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
+  window.speechSynthesis.getVoices();
+  window.speechSynthesis.onvoiceschanged = () => {
+    pickBestChineseVoice();
+  };
+  setTimeout(() => pickBestChineseVoice(), 300);
+}
+
 function EcouterBtn({ text, slow, label }) {
+  const [loading, setLoading] = useState(false);
+  const [playing, setPlaying] = useState(false);
+
+  const handleClick = async () => {
+    if (loading) return;
+    setLoading(true);
+    const ok = await speak(text, slow ? 0.45 : 0.85);
+    setLoading(false);
+    if (ok) {
+      setPlaying(true);
+      const dur = Math.max(800, String(text).length * 320);
+      setTimeout(() => setPlaying(false), dur);
+    }
+  };
+
+  const base = "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold transition-all active:scale-95 disabled:opacity-60";
+  const style = slow
+    ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:border-amber-400"
+    : "border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400";
+
   return (
     <button
-      onClick={() => speak(text, slow ? 0.45 : 0.9)}
-      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${
-        slow
-          ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
-          : "border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
-      }`}
+      onClick={handleClick}
+      disabled={loading}
+      className={`${base} ${style} ${playing ? "ring-2 ring-offset-1 ring-red-300 animate-pulse" : ""}`}
+      title={slow ? "Écouter lentement" : "Écouter"}
     >
-      {slow ? "🐢" : "🔊"} {label || (slow ? "lent" : "écouter")}
+      {loading ? (
+        <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+      ) : (
+        <span>{slow ? "🐢" : "🔊"}</span>
+      )}
+      <span>{label || (slow ? "lent" : "écouter")}</span>
     </button>
+  );
+}
+
+function VoiceDiagnostic() {
+  const [info, setInfo] = useState(null);
+
+  const run = async () => {
+    const voices = await loadVoices();
+    const zh = voices.filter((v) => v.lang && v.lang.toLowerCase().startsWith("zh"));
+    const best = await pickBestChineseVoice();
+    setInfo({
+      total: voices.length,
+      chinese: zh.length,
+      best: best ? `${best.name} (${best.lang})` : null,
+      all: zh.map((v) => `${v.name} (${v.lang})`),
+    });
+  };
+
+  return (
+    <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-xs">
+      <button onClick={run} className="font-bold text-gray-700 hover:text-red-600">
+        🔍 Diagnostic vocal
+      </button>
+      {info && (
+        <div className="mt-2 text-gray-600 space-y-1">
+          <div>
+            Voix totales : <b>{info.total}</b> · Voix chinoises : <b className={info.chinese > 0 ? "text-green-600" : "text-red-600"}>{info.chinese}</b>
+          </div>
+          {info.best ? (
+            <div className="text-green-700">✓ Meilleure voix : <b>{info.best}</b></div>
+          ) : (
+            <div className="text-red-600">
+              ✗ Aucune voix chinoise détectée. Installe-en une : Windows → Paramètres → Heure et langue → Voix → Ajouter 中文（中国）
+            </div>
+          )}
+          {info.all.length > 0 && (
+            <details>
+              <summary className="cursor-pointer text-gray-500">Voir les {info.all.length} voix chinoises</summary>
+              <ul className="mt-1 pl-3 text-[10px] text-gray-500 list-disc">
+                {info.all.map((v, i) => <li key={i}>{v}</li>)}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1344,6 +1502,14 @@ function EcouteRepete() {
   const [lessonId, setLessonId] = useState(1);
   const lesson = ALL_LESSONS.find((l) => l.id === lessonId);
   const items = lesson.sections.flatMap((s) => s.vocab);
+  const customDialogues = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem("hsk1-dialogues-custom-v1") || "{}");
+    } catch (e) {
+      return {};
+    }
+  }, [lessonId]);
+  const dialoguesForLesson = customDialogues[lessonId] || DIALOGUES[lessonId] || [];
   return (
     <div>
       <LessonChips value={lessonId} onChange={setLessonId} />
@@ -1367,7 +1533,7 @@ function EcouteRepete() {
       </div>
       <h3 className="text-lg font-bold text-gray-800 mb-3">🎭 Dialogues — joue les deux rôles</h3>
       <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50 space-y-2 mb-4">
-        {(DIALOGUES[lessonId] || []).map((line, i) => (
+        {dialoguesForLesson.map((line, i) => (
           <div key={i} className={`flex items-center justify-between gap-2 p-2.5 rounded-lg ${line[0] === "A" ? "bg-white border border-indigo-100" : "bg-indigo-100"}`}>
             <div className="flex items-center gap-3">
               <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center shrink-0">{line[0]}</span>
@@ -1380,7 +1546,7 @@ function EcouteRepete() {
             <EcouterBtn text={line[1]} />
           </div>
         ))}
-        <EcouterBtn text={(DIALOGUES[lessonId] || []).map((l) => l[1]).join("，")} label="tout le dialogue" />
+        <EcouterBtn text={dialoguesForLesson.map((l) => l[1]).join("，")} label="tout le dialogue" />
       </div>
     </div>
   );
@@ -1718,6 +1884,10 @@ function Phonetique() {
             <EcouterBtn text={word} />
           </div>
         ))}
+      </div>
+
+      <div className="mt-8 mb-4 max-w-lg mx-auto">
+        <VoiceDiagnostic />
       </div>
 
       <p className="text-xs text-gray-400 text-center">
@@ -2064,10 +2234,6 @@ function DefiEclair({ unlockedLessons, addXp }) {
     }, 1000);
   };
 
-  const finish = () => {
-    setStatus("done");
-  };
-
   useEffect(() => {
     if (status === "done" && !rewardRef.current) {
       rewardRef.current = true;
@@ -2283,10 +2449,6 @@ function Parcours({ progress, onLaunch }) {
 
 // ============================== EXPRESS · JEUX · PROF IA · FONDATION ==============================
 
-const GEMINI_KEY_STORE = "hsk1-gemini-key";
-const WAVE_LINK_STORE = "hsk1-wave-link";
-const FREE_AI_PER_DAY = 5;
-
 const PHRASES_DU_JOUR = [
   { zh: "我喝咖啡。", py: "Wǒ hē kāfēi.", fr: "Je bois du café." },
   { zh: "我家有五口人。", py: "Wǒ jiā yǒu wǔ kǒu rén.", fr: "Il y a cinq personnes dans ma famille." },
@@ -2404,7 +2566,6 @@ function Express({ addXp, addCoins, unlockedLessons }) {
   const [qi, setQi] = useState(0);
   const [sel, setSel] = useState(null);
   const [score, setScore] = useState(0);
-  const [known, setKnown] = useState(0);
   const [seconds, setSeconds] = useState(0);
 
   const cards = useMemo(
@@ -3269,7 +3430,7 @@ function Don({ progress, setDonor, addDonation, donateCoins }) {
   );
 }
 
-// ------------------------------ PRONONCIATION CORRIGÉE ------------------------------
+// ------------------------------ PRONONCIATION v2 ------------------------------
 
 function Prononciation({ addXp, addCoins, unlockedLessons }) {
   const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -3304,34 +3465,73 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
     try {
       const rec = new SR();
       rec.lang = "zh-CN";
+      rec.continuous = false;
       rec.interimResults = false;
-      rec.maxAlternatives = 3;
+      rec.maxAlternatives = 5;
+
       rec.onresult = (e) => {
         const res = e.results[0];
         let best = 0;
         let bestText = "";
+
         for (let k = 0; k < res.length; k++) {
-          const sc = similarity(res[k].transcript, target.hanzi);
+          const heard = res[k].transcript;
+          let sc = similarity(heard, target.hanzi);
+
+          if (target.pinyin) {
+            const cleanPinyin = target.pinyin.toLowerCase().replace(/[\s\d[\]·]/g, "");
+            const cleanHeard = heard.toLowerCase().replace(/[\s\d[\]·]/g, "");
+            if (cleanHeard && cleanPinyin && (cleanHeard.includes(cleanPinyin) || cleanPinyin.includes(cleanHeard))) {
+              sc = Math.max(sc, 85);
+            }
+          }
+
           if (sc > best) {
             best = sc;
-            bestText = res[k].transcript;
+            bestText = heard;
           }
         }
+
+        if (best > 0 && best < 60 && target.hanzi.length >= 2) {
+          const half = target.hanzi.slice(0, Math.ceil(target.hanzi.length / 2));
+          if (similarity(bestText, half) >= 70) {
+            best = Math.round(best * 1.25);
+          }
+        }
+
         const entry = recordPron(target.hanzi, best);
         setHist(getPronHist());
         setResult({ heard: bestText, score: best, entry });
         setListening(false);
+
         if (best >= 70) {
           addXp(3);
           addCoins(1);
+        } else if (best >= 50) {
+          addXp(1);
         }
       };
-      rec.onerror = () => setListening(false);
+
+      rec.onerror = (e) => {
+        console.warn("Erreur de reconnaissance :", e.error);
+        setListening(false);
+        if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+          alert(
+            "🎙️ Autorise l'accès au micro pour utiliser cette fonction.\n\n" +
+            "Chrome : icône 🔒 dans la barre d'adresse → Microphone → Autoriser\n" +
+            "Android : Paramètres → Applications → Chrome → Autorisations → Microphone"
+          );
+        } else if (e.error === "no-speech") {
+          setResult({ heard: "(aucun son détecté)", score: 0, entry: { best: 0, tries: 1, first: 0, last: 0 } });
+        }
+      };
+
       rec.onend = () => setListening(false);
       setResult(null);
       setListening(true);
       rec.start();
     } catch (e) {
+      console.warn("Impossible de démarrer la reconnaissance :", e);
       setListening(false);
     }
   };
@@ -3424,6 +3624,8 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
                     ? "🎉 完美！Parfait, comme un natif ! +3 XP +1 🪙"
                     : result.score >= 70
                     ? "✓ Bien prononcé ! +3 XP +1 🪙 — essaie d'atteindre 90% pour 3 étoiles"
+                    : result.score >= 50
+                    ? "👍 Pas mal ! +1 XP — réécoute le modèle (🐢) et réessaie pour gagner plus"
                     : result.score >= 40
                     ? "🔍 Presque ! Réécoute le modèle lentement (🐢) et réessaie — le 声调 (ton) fait toute la différence"
                     : "😅 Le mot entendu est très différent. Écoute le modèle 2 fois, puis répète doucement"}
@@ -3554,7 +3756,7 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
 
   const addVocab = () => {
     if (!vocabDraft.hanzi.trim()) return notify("Caractère requis");
-    persistCatalog({ ...catalog, vocab: [...catalog.vocab, { ...vocabDraft }] });
+    persistCatalog({ ...catalog, vocab: [...(catalog.vocab || []), { ...vocabDraft }] });
     setVocabDraft({ ...vocabDraft, hanzi: "", pinyin: "", fr: "" });
     notify("✅ Mot ajouté — visible après rechargement (fiches, jeux, express, prononciation)");
   };
@@ -3671,7 +3873,6 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
           <h4 className="font-bold text-gray-900 mb-1">📊 Apprendre des utilisateurs</h4>
           <p className="text-xs text-gray-500 mb-4">
             Les questions les plus souvent ratées par les apprenants — tes priorités pour améliorer les cours.
-            (Sur la version en ligne, ces statistiques seront agrégées depuis tous les utilisateurs en temps réel via Supabase.)
           </p>
           {topMisses.length === 0 ? (
             <p className="text-sm text-gray-400">Aucune erreur enregistrée pour l'instant.</p>
@@ -3778,7 +3979,7 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
         <div className="p-5 rounded-2xl border border-indigo-200 bg-indigo-50">
           <h4 className="font-bold text-gray-900 mb-1">🤖 Concepteur IA de cours (Gemini)</h4>
           <p className="text-xs text-gray-500 mb-3">
-            Décris le cours à créer — l'IA génère leçon, vocabulaire, phrases et quiz. Vérifie, ajuste, puis publie dans le catalogue.
+            Décris le cours à créer — l'IA génère leçon, vocabulaire, phrases et quiz.
             Nécessite ta clé API Gemini (configurée dans l'onglet Prof IA ⚙️).
           </p>
           <textarea
@@ -3863,10 +4064,6 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
               ))}
             </div>
           </div>
-          <p className="text-[10px] text-gray-400">
-            Note : dans cette version test, les réglages s'appliquent à cet appareil. Sur la version en ligne avec Supabase,
-            ils s'appliqueront à tous les utilisateurs en temps réel.
-          </p>
         </div>
       )}
 
@@ -4069,6 +4266,8 @@ function Progres({ progress, setGoal }) {
 // ============================== APP ==============================
 
 export default function App() {
+  useEffect(() => { preloadVoices(); }, []);
+
   const { progress, addXp, completeNode, setGoal, addCoins, donateCoins, spendCoins, buyAvatar, setDonor, addDonation, registerAI, aiUsedToday } = useProgress();
   const [view, setView] = useState("parcours");
   const [nodeId, setNodeId] = useState(null);
