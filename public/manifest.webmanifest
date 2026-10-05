@@ -1,0 +1,12 @@
+{
+  "name": "YǔLù 语路 — Campus chinois HSK",
+  "short_name": "YǔLù",
+  "description": "Parcours HSK 1, jeux, prof IA et prononciation corrigée — chaque don soutient Sauvons Nos Vies.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fef2f2",
+  "theme_color": "#dc2626",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
