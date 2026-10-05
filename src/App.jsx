@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import Studio from "./Studio.jsx";
 
 // ============================== DONNÉES DES COURS ==============================
 
@@ -3836,6 +3837,7 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
   };
 
   const SECTIONS = [
+    ["studio", "🎬 Studio IA"],
     ["stats", "📊 Retours apprenants"],
     ["catalogue", "📚 Catalogue de cours"],
     ["ia", "🤖 Concepteur IA"],
@@ -3975,46 +3977,48 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
         </div>
       )}
 
-      {section === "ia" && (
-        <div className="p-5 rounded-2xl border border-indigo-200 bg-indigo-50">
-          <h4 className="font-bold text-gray-900 mb-1">🤖 Concepteur IA de cours (Gemini)</h4>
-          <p className="text-xs text-gray-500 mb-3">
-            Décris le cours à créer — l'IA génère leçon, vocabulaire, phrases et quiz.
-            Nécessite ta clé API Gemini (configurée dans l'onglet Prof IA ⚙️).
-          </p>
-          <textarea
-            value={iaTopic}
-            onChange={(e) => setIaTopic(e.target.value)}
-            placeholder="Ex: Leçon 6 — les couleurs et les vêtements du quotidien"
-            className="w-full px-3 py-2 rounded-xl border border-gray-300 text-sm h-20"
-          />
-          <button onClick={iaGenerate} disabled={iaBusy} className="mt-2 px-5 py-2 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 disabled:opacity-50">
-            {iaBusy ? "✨ L'IA conçoit ton cours…" : "✨ Générer le cours"}
-          </button>
-          {iaErr && <div className="mt-2 text-xs text-red-600">{iaErr}</div>}
-          {iaPreview && (
-            <div className="mt-4 p-4 rounded-xl bg-white border border-indigo-200">
-              <div className="font-bold text-gray-900">{iaPreview.lesson.titre} · {iaPreview.lesson.zh} ({iaPreview.lesson.pinyin})</div>
-              <div className="text-xs text-gray-500 mb-2">{iaPreview.lesson.fr}</div>
-              <div className="text-sm">
-                <b>Vocabulaire :</b>{" "}
-                {iaPreview.vocab.map((v) => v.hanzi + " " + v.pinyin).join(" · ")}
-              </div>
-              <div className="text-sm mt-1">
-                <b>Quiz :</b> {iaPreview.quiz.length} questions générées · <b>Phrases :</b> {(iaPreview.phrases || []).length}
-              </div>
-              <div className="flex gap-2 mt-3">
-                <button onClick={iaValidate} className="px-4 py-2 rounded-xl bg-green-600 text-white text-xs font-bold hover:bg-green-700">
-                  ✓ Publier dans le catalogue
-                </button>
-                <button onClick={() => setIaPreview(null)} className="px-4 py-2 rounded-xl bg-white border border-gray-300 text-gray-500 text-xs">
-                  Regénérer / annuler
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {section === "studio" && (
+  <Studio
+    geminiKey={(() => {
+      try { return localStorage.getItem(GEMINI_KEY_STORE) || ""; } catch (e) { return ""; }
+    })()}
+    existingLessons={ALL_LESSONS}
+    onPublish={(lessonData) => {
+      // 1. Ajouter la leçon au catalogue
+      const newCatalog = {
+        ...catalog,
+        lessons: [
+          ...catalog.lessons,
+          {
+            id: lessonData.lesson.id,
+            titre: lessonData.lesson.titre,
+            zh: lessonData.lesson.zh,
+            pinyin: lessonData.lesson.pinyin,
+            fr: lessonData.lesson.fr,
+            sections: lessonData.sections,
+            phrases: lessonData.phrases,
+            pinyinNotes: lessonData.pinyinNotes,
+            caracteres: lessonData.caracteres,
+          },
+        ],
+        quiz: [...catalog.quiz, ...lessonData.quiz],
+      };
+      persistCatalog(newCatalog);
+
+      // 2. Sauvegarder les dialogues custom
+      try {
+        const dialoguesKey = "hsk1-dialogues-custom-v1";
+        const existing = JSON.parse(localStorage.getItem(dialoguesKey) || "{}");
+        if (lessonData.dialogues?.length) {
+          existing[lessonData.lesson.id] = lessonData.dialogues;
+          localStorage.setItem(dialoguesKey, JSON.stringify(existing));
+        }
+      } catch (e) {}
+
+      notify(`✅ "${lessonData.lesson.titre}" publiée !`);
+    }}
+  />
+)}
 
       {section === "facturation" && (
         <div className="p-5 rounded-2xl border border-gray-200 bg-white space-y-4">
