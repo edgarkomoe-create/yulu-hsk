@@ -22,21 +22,73 @@ export const supabase =
 
 // ============================== AUTHENTIFICATION ==============================
 
+// 🌍 URL de redirection intelligente (dev vs prod)
+const REDIRECT_URL =
+  typeof window !== "undefined" && window.location.hostname === "localhost"
+    ? window.location.origin
+    : "https://yulu-hsk.vercel.app";
+
+// 📧 Magic Link (lien par email, sans mot de passe)
 export async function signInWithEmail(email) {
   if (!supabase) throw new Error("Supabase non configuré");
   const { data, error } = await supabase.auth.signInWithOtp({
     email,
-    options: { emailRedirectTo: window.location.origin },
+    options: { emailRedirectTo: REDIRECT_URL },
   });
   if (error) throw error;
   return data;
 }
 
+// 🔑 Inscription avec mot de passe
+export async function signUpWithPassword(email, password) {
+  if (!supabase) throw new Error("Supabase non configuré");
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { emailRedirectTo: REDIRECT_URL },
+  });
+  if (error) throw error;
+  return data;
+}
+
+// 🔑 Connexion avec mot de passe
+export async function signInWithPassword(email, password) {
+  if (!supabase) throw new Error("Supabase non configuré");
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// 🔑 Réinitialisation de mot de passe (envoie un email)
+export async function resetPassword(email) {
+  if (!supabase) throw new Error("Supabase non configuré");
+  const { data, error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: REDIRECT_URL,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// 🔑 Mise à jour du mot de passe (après clic sur le lien de reset)
+export async function updatePassword(newPassword) {
+  if (!supabase) throw new Error("Supabase non configuré");
+  const { data, error } = await supabase.auth.updateUser({
+    password: newPassword,
+  });
+  if (error) throw error;
+  return data;
+}
+
+// 🚪 Déconnexion
 export async function signOut() {
   if (!supabase) return;
   await supabase.auth.signOut();
 }
 
+// 👤 Utilisateur courant
 export async function getCurrentUser() {
   if (!supabase) return null;
   try {
