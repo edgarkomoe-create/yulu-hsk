@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { signInWithEmail } from "./supabase.js";
 
-export default function AuthScreen({ onSkip, onBack }) {
+export default function AuthScreen({ onSkip, onBack, onSuccess }) {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -17,6 +17,8 @@ export default function AuthScreen({ onSkip, onBack }) {
     try {
       await signInWithEmail(email.trim());
       setSent(true);
+      // Prévient App.jsx que le magic link a été envoyé
+      if (onSuccess) onSuccess({ pending: true, email: email.trim() });
     } catch (e) {
       setError("Erreur : " + (e.message || "réessaye plus tard"));
     }
@@ -104,7 +106,17 @@ export default function AuthScreen({ onSkip, onBack }) {
               </p>
               <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 mb-4">
                 ⚠️ Pense à vérifier tes <b>spams</b> si tu ne vois rien après 1 minute.
+                <br />
+                📱 Ouvre le lien sur <b>le même appareil</b>.
               </div>
+
+              <button
+                onClick={onSkip}
+                className="w-full py-2.5 rounded-xl bg-gray-100 text-gray-600 font-medium hover:bg-gray-200 text-sm transition-colors mb-2"
+              >
+                Continuer sans compte en attendant
+              </button>
+
               <button
                 onClick={() => {
                   setSent(false);
