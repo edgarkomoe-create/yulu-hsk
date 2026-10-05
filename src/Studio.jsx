@@ -4,7 +4,7 @@ import React, { useState, useRef, useMemo, useEffect } from "react";
 
 export default function Studio({ onPublish, existingLessons, geminiKey }) {
   const [step, setStep] = useState("upload");
-  const [mode, setMode] = useState("text"); // text | pdf | photo | batch | duplicate | revise
+  const [mode, setMode] = useState("text");
   const [file, setFile] = useState(null);
   const [rawText, setRawText] = useState("");
   const [pastedText, setPastedText] = useState("");
@@ -13,33 +13,61 @@ export default function Studio({ onPublish, existingLessons, geminiKey }) {
   const [progressMsg, setProgressMsg] = useState("");
   const [batchFiles, setBatchFiles] = useState([]);
   const [batchPreviews, setBatchPreviews] = useState([]);
+  const [batchErrors, setBatchErrors] = useState([]);
   const [duplicateSource, setDuplicateSource] = useState(null);
   const [reviseTarget, setReviseTarget] = useState(null);
   const fileInputRef = useRef(null);
   const photoInputRef = useRef(null);
   const batchInputRef = useRef(null);
 
-  // ============================== PDF ==============================
+  // Constantes
+  const MAX_CHARS_FOR_AI = 30000; // Max caractères envoyés à Gemini
+  const MAX_PDF_SIZE = 15 * 1024 * 1024; // 15 Mo
+  const MAX_BATCH_FILES = 10;
+
+  // ============================== EXTRACTION PDF ==============================
   const extractPdfText = async (pdfFile) => {
+    if (pdfFile.size > MAX_PDF_SIZE) {
+      throw new Error(`PDF trop volumineux (${(pdfFile.size / 1024 / 1024).toFixed(1)} Mo). Maximum ${MAX_PDF_SIZE / 1024 / 1024} Mo.`);
+    }
+
+    console.log("📄 Début extraction PDF:", pdfFile.name, `(${(pdfFile.size / 1024).toFixed(0)} Ko)`);
+
     const pdfjsLib = await import("pdfjs-dist");
     pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+
     const arrayBuffer = await pdfFile.arrayBuffer();
+    console.log("📦 ArrayBuffer chargé:", arrayBuffer.byteLength, "bytes");
+
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    console.log("📖 PDF ouvert, pages:", pdf.numPages);
+
     let fullText = "";
     for (let i = 1; i <= pdf.numPages; i++) {
       setProgressMsg(`📄 Lecture page ${i} / ${pdf.numPages}…`);
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      const pageText = content.items.map((item) => item.str).join(" ");
-      fullText += pageText + "\n\n";
+      try {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const pageText = content.items.map((item) => item.str).join(" ");
+        fullText += pageText + "\n\n";
+      } catch (pageErr) {
+        console.warn(`⚠️ Erreur page ${i}:`, pageErr);
+      }
     }
+
+    console.log("✅ PDF extrait:", fullText.length, "caractères");
     return fullText;
   };
 
-  // ============================== PHOTO (Gemini Vision) ==============================
+  // ============================== PHOTO — Gemini Vision ==============================
   const analyzePhoto = async (photoFile) => {
     if (!geminiKey) throw new Error("no-key");
+    if (photoFile.size > 10 * 1024 * 1024) {
+      throw new Error("Image trop volumineuse (max 10 Mo).");
+    }
+
     setProgressMsg("🖼️ Analyse de la photo par Gemini Vision…");
+    console.log("🖼️ Analyse photo:", photoFile.name);
 
     const base64 = await new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -60,7 +88,10 @@ export default function Studio({ onPublish, existingLessons, geminiKey }) {
           contents: [
             {
               parts: [
-                { text: "Transcris TOUT le texte visible dans cette image, sans rien commenter. Si c'est un cours de chinois, garde les caractères chinois, le pinyin et les traductions. Retourne uniquement le texte brut, ligne par ligne." },
+                {
+                  text:
+                    "Transcris TOUT le texte visible dans cette image, sans rien commenter. Si c'est un cours de chinois, garde les caractères chinois, le pinyin et les traductions. Retourne uniquement le texte brut, ligne par ligne.",
+                },
                 { inline_data: { mime_type: mimeType, data: base64 } },
               ],
             },
@@ -69,53 +100,67 @@ export default function Studio({ onPublish, existingLessons, geminiKey }) {
         }),
       }
     );
+
     const data = await res.json();
+    if (data.error) {
+      throw new Error("Gemini Vision: " + (data.error.message || "erreur API"));
+    }
     const parts = (((data.candidates || [])[0] || {}).content || {}).parts;
     if (!parts || !parts[0] || !parts[0].text) throw new Error("vision-failed");
     return parts[0].text.trim();
   };
 
-  // ============================== HANDLERS ==============================
+  // ============================== LECTURE FICHIER ==============================
   const handleFile = async (f) => {
     setFile(f);
     setError("");
     setProgressMsg("");
+
     try {
       const name = f.name.toLowerCase();
+      console.log("📁 Fichier reçu:", f.name, "type:", f.type, "taille:", f.size);
+
       if (name.endsWith(".txt") || name.endsWith(".md") || name.endsWith(".csv")) {
         const text = await f.text();
         setRawText(text);
-        setProgressMsg(`✅ ${text.length} caractères extraits`);
+        setProgressMsg(`✅ ${text.length.toLocaleString()} caractères extraits`);
       } else if (name.endsWith(".html") || name.endsWith(".htm")) {
         const html = await f.text();
         const div = document.createElement("div");
         div.innerHTML = html;
         const text = div.innerText || div.textContent || "";
         setRawText(text);
-        setProgressMsg(`✅ ${text.length} caractères extraits`);
+        setProgressMsg(`✅ ${text.length.toLocaleString()} caractères extraits (HTML)`);
       } else if (name.endsWith(".pdf")) {
         const text = await extractPdfText(f);
         setRawText(text);
-        setProgressMsg(`✅ PDF lu : ${text.length} caractères · ${text.split(/\s+/).length} mots`);
+        setProgressMsg(`✅ PDF lu : ${text.length.toLocaleString()} caractères · ${text.split(/\s+/).length} mots`);
       } else if (f.type.startsWith("image/")) {
         if (!geminiKey) {
-          setError("Clé API Gemini requise pour analyser les photos. Configure-la dans Prof IA (⚙️).");
+          setError("🔑 Clé Gemini requise pour analyser les photos. Configure-la dans Prof IA (⚙️).");
           setProgressMsg("");
           return;
         }
         const text = await analyzePhoto(f);
         setRawText(text);
-        setProgressMsg(`✅ Photo analysée : ${text.length} caractères reconnus`);
+        setProgressMsg(`✅ Photo analysée : ${text.length.toLocaleString()} caractères reconnus`);
       } else {
-        setError("Format non supporté. Utilise .txt, .md, .pdf, .html ou une image.");
+        setError("❌ Format non supporté. Utilise .txt, .md, .pdf, .html ou une image.");
         setProgressMsg("");
       }
     } catch (e) {
-      console.warn(e);
+      console.error("❌ Erreur handleFile:", e);
+      console.error("   Message:", e.message);
+      console.error("   Stack:", e.stack);
+
       if (e.message === "no-key") {
-        setError("Ajoute ta clé Gemini dans Prof IA (⚙️) pour analyser les images.");
+        setError("🔑 Ajoute ta clé Gemini dans Prof IA (⚙️) pour analyser les images.");
+      } else if (e.message && (e.message.includes("PDF") || e.message.includes("volumineux"))) {
+        setError("❌ " + e.message + "\n💡 Essaie avec un PDF plus petit ou en copiant-collant le texte.");
+      } else if (e.message && e.message.includes("Vision")) {
+        setError("❌ Erreur Gemini Vision : " + e.message);
       } else {
-        setError("Impossible de lire ce fichier : " + e.message);
+        setError("❌ Impossible de lire ce fichier : " + (e.message || "erreur inconnue") + "\n💡 Essaie un autre format (.txt, .md) ou copie le texte manuellement.");
       }
       setProgressMsg("");
     }
@@ -128,15 +173,21 @@ export default function Studio({ onPublish, existingLessons, geminiKey }) {
     if (f) handleFile(f);
   };
 
-  // ============================== GÉNÉRATION IA ==============================
-  const buildPrompt = (source, nextId, kind = "new") => `
+  // ============================== PROMPT IA ==============================
+  const buildPrompt = (source, nextId, kind = "new") => {
+    const wasTruncated = source.length > MAX_CHARS_FOR_AI;
+    const truncated = wasTruncated ? source.slice(0, MAX_CHARS_FOR_AI) : source;
+
+    return `
 Tu es un concepteur pédagogique expert HSK 1 (débutant absolu, niveau A1) pour des apprenants francophones en Côte d'Ivoire.
 
 ${kind === "revise" ? "Voici une leçon existante à AMÉLIORER (enrichir, corriger, ajouter des exemples) :" : "Voici le CONTENU BRUT d'un cours (peut contenir du texte, des notes, un plan, une liste de vocabulaire…) :"}
 
 """
-${source.slice(0, 6000)}
+${truncated}
 """
+
+${wasTruncated ? "\n⚠️ NOTE : Le document était long, seule une partie a été analysée. Concentre-toi sur les éléments pédagogiques essentiels visibles.\n" : ""}
 
 Ta mission : transformer ce contenu en une leçon YǔLù complète et structurée.
 
@@ -183,21 +234,29 @@ Réponds UNIQUEMENT avec du JSON valide (pas de markdown, pas de texte autour), 
 }
 
 CONTRAINTES STRICTES :
-- 2 à 4 sections de vocabulaire maximum, 5 à 10 mots par section
+- 2 à 5 sections de vocabulaire, 5 à 10 mots par section
 - 3 à 5 phrases clés
 - 3 à 6 notes de pinyin
 - 2 à 4 notes sur les caractères
-- 6 à 10 questions de quiz avec 4 options chacune (varie l'index de la bonne réponse : 0, 1, 2, 3 — jamais toujours 0)
+- 6 à 10 questions de quiz avec 4 options chacune (varie l'index : 0, 1, 2, 3)
 - 1 à 2 dialogues de 3 à 6 répliques
 - Traductions en français naturel
-- Vocabulaire HSK 1 uniquement (débutant)
+- Vocabulaire HSK 1 uniquement
 - Pinyin avec tons corrects
-`;
 
+RÉPONDS UNIQUEMENT AVEC LE JSON. Aucun texte avant, aucun texte après.
+`;
+  };
+
+  // ============================== APPEL GEMINI ==============================
   const callGemini = async (source, kind = "new") => {
     if (!geminiKey) throw new Error("no-key");
+
     const nextId = Math.max(5, ...(existingLessons || []).map((l) => l.id || 5)) + 1;
     const prompt = buildPrompt(source, nextId, kind);
+
+    console.log("🤖 Appel Gemini, longueur prompt:", prompt.length, "caractères");
+
     const res = await fetch(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" +
         encodeURIComponent(geminiKey),
@@ -206,21 +265,43 @@ CONTRAINTES STRICTES :
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.6 },
+          generationConfig: {
+            temperature: 0.6,
+            maxOutputTokens: 8192,
+          },
         }),
       }
     );
+
     const data = await res.json();
+
+    if (data.error) {
+      console.error("❌ Erreur API Gemini:", data.error);
+      throw new Error("Gemini API: " + (data.error.message || "erreur inconnue"));
+    }
+
     const parts = (((data.candidates || [])[0] || {}).content || {}).parts;
-    if (!parts || !parts[0] || !parts[0].text) throw new Error("empty-response");
+    if (!parts || !parts[0] || !parts[0].text) {
+      console.error("❌ Réponse Gemini vide:", data);
+      throw new Error("empty-response");
+    }
+
     let txt = parts[0].text.trim();
     txt = txt.replace(/^```(json)?/i, "").replace(/```$/, "").trim();
     const s = txt.indexOf("{");
     const e = txt.lastIndexOf("}");
     if (s >= 0 && e > s) txt = txt.slice(s, e + 1);
-    return JSON.parse(txt);
+
+    try {
+      return JSON.parse(txt);
+    } catch (jsonErr) {
+      console.error("❌ Erreur parsing JSON:", jsonErr);
+      console.error("   Texte reçu:", txt.slice(0, 500));
+      throw new Error("Réponse IA invalide (JSON malformé). Réessaie.");
+    }
   };
 
+  // ============================== NORMALISATION ==============================
   const normalize = (data, id) => ({
     lesson: {
       id,
@@ -229,40 +310,59 @@ CONTRAINTES STRICTES :
       pinyin: data.lesson?.pinyin || "",
       fr: data.lesson?.fr || "",
     },
-    sections: (data.sections || []).map((s) => ({
-      titre: s.titre || "Vocabulaire",
-      vocab: (s.vocab || []).filter((v) => v.hanzi),
-    })),
+    sections: (data.sections || [])
+      .map((s) => ({
+        titre: s.titre || "Vocabulaire",
+        vocab: (s.vocab || []).filter((v) => v.hanzi),
+      }))
+      .filter((s) => s.vocab.length > 0),
     phrases: (data.phrases || []).filter((p) => p.zh),
     pinyinNotes: data.pinyinNotes || [],
     caracteres: data.caracteres || [],
-    quiz: (data.quiz || []).map((q) => ({
-      lesson: id,
-      type: q.type || "Studio",
-      question: q.question,
-      options: q.options || [],
-      answer: Number(q.answer) || 0,
-      explication: q.explication || "",
-    })),
+    quiz: (data.quiz || [])
+      .filter((q) => q.question && q.options && q.options.length >= 2)
+      .map((q) => ({
+        lesson: id,
+        type: q.type || "Studio",
+        question: q.question,
+        options: q.options,
+        answer: Number(q.answer) || 0,
+        explication: q.explication || "",
+      })),
     dialogues: data.dialogues || [],
   });
 
+  // ============================== GÉNÉRATION SIMPLE ==============================
   const generate = async () => {
     const source = (rawText || pastedText).trim();
-    if (!source) return setError("Dépose un fichier ou colle le contenu du cours.");
-    if (!geminiKey) return setError("Configure ta clé API Gemini dans l'onglet Prof IA (⚙️).");
+    if (!source) {
+      setError("❌ Dépose un fichier ou colle le contenu du cours.");
+      return;
+    }
+    if (!geminiKey) {
+      setError("🔑 Configure ta clé API Gemini dans l'onglet Prof IA (⚙️).");
+      return;
+    }
+
     setError("");
     setStep("analyzing");
+    setProgressMsg("🤖 L'IA analyse ton cours…");
+
     try {
-      setProgressMsg("🤖 L'IA analyse ton cours…");
       const nextId = Math.max(5, ...(existingLessons || []).map((l) => l.id || 5)) + 1;
       const data = await callGemini(source, "new");
       setPreview(normalize(data, nextId));
       setProgressMsg("✨ Cours généré ! Vérifie et édite si besoin.");
       setStep("preview");
     } catch (e) {
-      console.warn(e);
-      setError("L'IA n'a pas pu générer (clé invalide, quota dépassé ou connexion). Vérifie ta clé dans Prof IA.");
+      console.error("❌ Erreur generate:", e);
+      let msg = "L'IA n'a pas pu générer. ";
+      if (e.message === "no-key") msg += "Clé API manquante.";
+      else if (e.message.includes("API")) msg += e.message;
+      else if (e.message.includes("JSON")) msg += "Réponse malformée, réessaie.";
+      else if (e.message.includes("quota")) msg += "Quota dépassé.";
+      else msg += "Vérifie ta clé (Prof IA ⚙️), ta connexion, ou réessaie avec un texte plus court.";
+      setError("❌ " + msg);
       setStep("upload");
       setProgressMsg("");
     }
@@ -270,24 +370,36 @@ CONTRAINTES STRICTES :
 
   // ============================== IMPORT EN MASSE ==============================
   const handleBatchFiles = async (files) => {
-    if (!geminiKey) return setError("Clé API Gemini requise pour l'import en masse.");
+    if (!geminiKey) {
+      setError("🔑 Clé API Gemini requise pour l'import en masse.");
+      return;
+    }
+    if (files.length > MAX_BATCH_FILES) {
+      setError(`⚠️ Maximum ${MAX_BATCH_FILES} fichiers à la fois.`);
+      return;
+    }
     setError("");
     setBatchFiles([...files]);
     setBatchPreviews([]);
-    setProgressMsg(`${files.length} fichiers chargés · préparation…`);
+    setBatchErrors([]);
+    setProgressMsg(`${files.length} fichier(s) chargé(s) · prêt à générer`);
   };
 
   const runBatch = async () => {
-    if (!geminiKey) return setError("Clé API Gemini requise.");
-    if (!batchFiles.length) return setError("Sélectionne au moins 1 fichier.");
+    if (!geminiKey) return setError("🔑 Clé API Gemini requise.");
+    if (!batchFiles.length) return setError("❌ Sélectionne au moins 1 fichier.");
+
     setStep("analyzing");
     const results = [];
-    try {
-      for (let i = 0; i < batchFiles.length; i++) {
-        const f = batchFiles[i];
-        setProgressMsg(`📄 Fichier ${i + 1} / ${batchFiles.length} — lecture…`);
+    const errors = [];
+
+    for (let i = 0; i < batchFiles.length; i++) {
+      const f = batchFiles[i];
+      try {
+        setProgressMsg(`📄 Fichier ${i + 1}/${batchFiles.length} : ${f.name} — lecture…`);
         let text = "";
         const name = f.name.toLowerCase();
+
         if (name.endsWith(".txt") || name.endsWith(".md") || name.endsWith(".csv")) {
           text = await f.text();
         } else if (name.endsWith(".pdf")) {
@@ -300,21 +412,34 @@ CONTRAINTES STRICTES :
           div.innerHTML = html;
           text = div.innerText || "";
         } else {
-          continue;
+          throw new Error("Format non supporté");
         }
+
+        if (!text || !text.trim()) {
+          throw new Error("Fichier vide");
+        }
+
         setProgressMsg(`🤖 Fichier ${i + 1}/${batchFiles.length} — génération IA…`);
         const nextId = Math.max(5, ...(existingLessons || []).map((l) => l.id || 5)) + i + 1;
         const data = await callGemini(text, "new");
         results.push(normalize(data, nextId));
+      } catch (e) {
+        console.error(`❌ Erreur fichier ${f.name}:`, e);
+        errors.push({ file: f.name, error: e.message || "erreur inconnue" });
       }
-      setBatchPreviews(results);
-      setProgressMsg(`✨ ${results.length} leçons générées · prêtes à publier`);
-      setStep("batch-preview");
-    } catch (e) {
-      console.warn(e);
-      setError("Erreur pendant l'import en masse.");
-      setStep("upload");
     }
+
+    setBatchPreviews(results);
+    setBatchErrors(errors);
+
+    if (results.length === 0) {
+      setError("❌ Aucune leçon n'a pu être générée. Vérifie tes fichiers.");
+      setStep("upload");
+      return;
+    }
+
+    setProgressMsg(`✨ ${results.length} leçon(s) générée(s)${errors.length ? ` · ${errors.length} échec(s)` : ""}`);
+    setStep("batch-preview");
   };
 
   const publishBatch = () => {
@@ -324,8 +449,8 @@ CONTRAINTES STRICTES :
 
   // ============================== DUPLICATION ==============================
   const runDuplicate = async () => {
-    if (!duplicateSource) return setError("Choisis une leçon à dupliquer.");
-    if (!geminiKey) return setError("Clé API Gemini requise.");
+    if (!duplicateSource) return setError("❌ Choisis une leçon à dupliquer.");
+    if (!geminiKey) return setError("🔑 Clé API Gemini requise.");
     setStep("analyzing");
     try {
       const src = duplicateSource;
@@ -337,24 +462,26 @@ CONTRAINTES STRICTES :
         ]),
         ...(src.phrases || []).map((p) => `Phrase : ${p.zh} (${p.pinyin}) = ${p.fr}`),
       ].join("\n");
+
       setProgressMsg("🔄 L'IA crée une variante enrichie…");
       const nextId = Math.max(5, ...(existingLessons || []).map((l) => l.id || 5)) + 1;
       const data = await callGemini(
-        text + "\n\nCrée une VARIANTE enrichie de cette leçon : ajoute du vocabulaire complémentaire HSK 1, varie les exemples, change les questions de quiz.",
+        text +
+          "\n\nCrée une VARIANTE enrichie de cette leçon : ajoute du vocabulaire complémentaire HSK 1, varie les exemples, change les questions de quiz.",
         "new"
       );
       setPreview(normalize(data, nextId));
       setStep("preview");
     } catch (e) {
-      setError("Impossible de dupliquer : " + e.message);
+      setError("❌ Impossible de dupliquer : " + e.message);
       setStep("upload");
     }
   };
 
   // ============================== RÉVISION ==============================
   const runRevise = async () => {
-    if (!reviseTarget) return setError("Choisis une leçon à réviser.");
-    if (!geminiKey) return setError("Clé API Gemini requise.");
+    if (!reviseTarget) return setError("❌ Choisis une leçon à réviser.");
+    if (!geminiKey) return setError("🔑 Clé API Gemini requise.");
     setStep("analyzing");
     try {
       const src = reviseTarget;
@@ -364,7 +491,7 @@ CONTRAINTES STRICTES :
       setPreview(normalize(data, src.id));
       setStep("preview");
     } catch (e) {
-      setError("Impossible de réviser : " + e.message);
+      setError("❌ Impossible de réviser : " + e.message);
       setStep("upload");
     }
   };
@@ -402,7 +529,10 @@ CONTRAINTES STRICTES :
     });
 
   const addSection = () =>
-    setPreview((p) => ({ ...p, sections: [...p.sections, { titre: "Nouvelle section", vocab: [] }] }));
+    setPreview((p) => ({
+      ...p,
+      sections: [...p.sections, { titre: "Nouvelle section", vocab: [] }],
+    }));
 
   const updateQuiz = (qi, field, value) =>
     setPreview((p) => {
@@ -418,7 +548,7 @@ CONTRAINTES STRICTES :
       return next;
     });
 
-  // ============================== EXPORT ==============================
+  // ============================== EXPORT / IMPORT ==============================
   const exportJSON = () => {
     if (!preview) return;
     const blob = new Blob([JSON.stringify(preview, null, 2)], { type: "application/json" });
@@ -439,7 +569,7 @@ CONTRAINTES STRICTES :
         setPreview(data);
         setStep("preview");
       } catch (err) {
-        setError("Fichier JSON invalide.");
+        setError("❌ Fichier JSON invalide.");
       }
     };
     reader.readAsText(jsonFile);
@@ -459,6 +589,7 @@ CONTRAINTES STRICTES :
     setPreview(null);
     setBatchFiles([]);
     setBatchPreviews([]);
+    setBatchErrors([]);
     setDuplicateSource(null);
     setReviseTarget(null);
     setStep("upload");
@@ -469,15 +600,13 @@ CONTRAINTES STRICTES :
   // ============================== RENDU ==============================
   return (
     <div className="space-y-5">
-      {/* Header studio */}
+      {/* Header */}
       <div className="p-5 rounded-2xl bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg">
         <div className="flex items-center gap-3 mb-2">
           <span className="text-3xl">🎬</span>
           <div>
             <h3 className="text-xl font-bold">YǔLù Studio — Concepteur de cours automatique</h3>
-            <p className="text-sm opacity-90">
-              Dépose un PDF, une photo ou du texte — l'IA génère toute la leçon.
-            </p>
+            <p className="text-sm opacity-90">Dépose un PDF, une photo ou du texte — l'IA génère toute la leçon.</p>
           </div>
         </div>
         <div className="flex gap-1.5 mt-3 text-[10px]">
@@ -504,11 +633,14 @@ CONTRAINTES STRICTES :
         </div>
       </div>
 
+      {/* Erreur */}
       {error && (
-        <div className="p-4 rounded-xl bg-red-50 border border-red-300 text-red-800 text-sm font-medium">
-          ⚠️ {error}
+        <div className="p-4 rounded-xl bg-red-50 border border-red-300 text-red-800 text-sm font-medium whitespace-pre-line">
+          {error}
         </div>
       )}
+
+      {/* Message de progression */}
       {progressMsg && step !== "upload" && (
         <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-800 text-sm">
           {progressMsg}
@@ -518,7 +650,7 @@ CONTRAINTES STRICTES :
       {/* ====================== ÉTAPE 1 : UPLOAD ====================== */}
       {step === "upload" && (
         <>
-          {/* Onglets de mode */}
+          {/* Onglets */}
           <div className="flex flex-wrap gap-2">
             {[
               ["text", "📝 Texte"],
@@ -532,7 +664,9 @@ CONTRAINTES STRICTES :
                 key={id}
                 onClick={() => setMode(id)}
                 className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${
-                  mode === id ? "bg-purple-600 text-white shadow-lg" : "bg-white border border-gray-300 text-gray-700 hover:border-purple-500"
+                  mode === id
+                    ? "bg-purple-600 text-white shadow-lg"
+                    : "bg-white border border-gray-300 text-gray-700 hover:border-purple-500"
                 }`}
               >
                 {label}
@@ -543,9 +677,7 @@ CONTRAINTES STRICTES :
           {/* Mode TEXTE */}
           {mode === "text" && (
             <div className="p-5 rounded-2xl border border-gray-200 bg-white">
-              <label className="font-bold text-gray-900 text-sm mb-2 block">
-                📝 Colle le contenu de ton cours
-              </label>
+              <label className="font-bold text-gray-900 text-sm mb-2 block">📝 Colle le contenu de ton cours</label>
               <textarea
                 value={pastedText}
                 onChange={(e) => setPastedText(e.target.value)}
@@ -561,9 +693,7 @@ Questions :
 你最喜欢什么颜色？ Quelle est ta couleur préférée ?`}
                 className="w-full px-4 py-3 rounded-xl border border-gray-300 text-sm h-64 font-mono focus:border-purple-500 outline-none"
               />
-              <div className="text-xs text-gray-400 mt-1">
-                {pastedText.length.toLocaleString()} caractères
-              </div>
+              <div className="text-xs text-gray-400 mt-1">{pastedText.length.toLocaleString()} caractères</div>
               <button
                 onClick={generate}
                 disabled={!pastedText.trim()}
@@ -577,15 +707,20 @@ Questions :
           {/* Mode PDF */}
           {mode === "pdf" && (
             <div
-              onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add("border-purple-500", "bg-purple-50"); }}
-              onDragLeave={(e) => { e.currentTarget.classList.remove("border-purple-500", "bg-purple-50"); }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.currentTarget.classList.add("border-purple-500", "bg-purple-50");
+              }}
+              onDragLeave={(e) => {
+                e.currentTarget.classList.remove("border-purple-500", "bg-purple-50");
+              }}
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
               className="p-10 rounded-2xl border-2 border-dashed border-purple-300 bg-purple-50/40 text-center cursor-pointer hover:border-purple-500 hover:bg-purple-50 transition-all"
             >
               <div className="text-5xl mb-3">📄</div>
               <div className="font-bold text-gray-900 mb-1">Dépose ton PDF ici</div>
-              <div className="text-sm text-gray-500 mb-3">ou clique pour parcourir</div>
+              <div className="text-sm text-gray-500 mb-3">ou clique pour parcourir (max 15 Mo)</div>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -605,9 +740,7 @@ Questions :
             >
               <div className="text-5xl mb-3">🖼️</div>
               <div className="font-bold text-gray-900 mb-1">Photo de ton cours manuscrit</div>
-              <div className="text-sm text-gray-500 mb-3">
-                Gemini Vision analyse l'image et transcrit le texte chinois
-              </div>
+              <div className="text-sm text-gray-500 mb-3">Gemini Vision analyse l'image et transcrit le texte</div>
               <input
                 ref={photoInputRef}
                 type="file"
@@ -615,20 +748,16 @@ Questions :
                 onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
                 className="hidden"
               />
-              <div className="mt-3 text-xs text-pink-700">
-                ⚙️ Nécessite ta clé Gemini (Prof IA → ⚙️)
-              </div>
+              <div className="mt-3 text-xs text-pink-700">⚙️ Nécessite ta clé Gemini (Prof IA → ⚙️)</div>
             </div>
           )}
 
           {/* Mode BATCH */}
           {mode === "batch" && (
             <div className="p-5 rounded-2xl border border-gray-200 bg-white">
-              <label className="font-bold text-gray-900 text-sm mb-2 block">
-                📦 Import en masse
-              </label>
+              <label className="font-bold text-gray-900 text-sm mb-2 block">📦 Import en masse</label>
               <p className="text-xs text-gray-500 mb-3">
-                Sélectionne plusieurs fichiers (.txt, .md, .pdf, images). L'IA génère une leçon complète pour chacun.
+                Sélectionne jusqu'à {MAX_BATCH_FILES} fichiers (.txt, .md, .pdf, images). L'IA génère une leçon pour chacun.
               </p>
               <input
                 ref={batchInputRef}
@@ -648,7 +777,9 @@ Questions :
                 <>
                   <ul className="mt-3 space-y-1 text-xs text-gray-600 max-h-32 overflow-auto">
                     {batchFiles.map((f, i) => (
-                      <li key={i}>📄 {f.name} ({(f.size / 1024).toFixed(0)} Ko)</li>
+                      <li key={i}>
+                        📄 {f.name} ({(f.size / 1024).toFixed(0)} Ko)
+                      </li>
                     ))}
                   </ul>
                   <button
@@ -700,7 +831,7 @@ Questions :
                 🔧 Révise et améliore une leçon existante
               </label>
               <p className="text-xs text-gray-500 mb-3">
-                L'IA reprend la leçon, corrige les erreurs potentielles, enrichit les exemples, ajoute du contenu.
+                L'IA reprend la leçon, corrige les erreurs, enrichit les exemples, ajoute du contenu.
               </p>
               <select
                 value={reviseTarget?.id || ""}
@@ -738,9 +869,7 @@ Questions :
               onChange={(e) => e.target.files?.[0] && importJSON(e.target.files[0])}
               className="block w-full text-xs"
             />
-            <p className="text-[10px] text-gray-500 mt-1">
-              Partage des leçons entre appareils · format YǔLù
-            </p>
+            <p className="text-[10px] text-gray-500 mt-1">Partage de leçons entre appareils · format YǔLù</p>
           </div>
         </>
       )}
@@ -764,7 +893,6 @@ Questions :
       {/* ====================== ÉTAPE 3 : PREVIEW ====================== */}
       {step === "preview" && preview && (
         <>
-          {/* Titre éditable */}
           <div className="p-5 rounded-2xl border border-gray-200 bg-white">
             <h4 className="font-bold text-gray-900 mb-3">📌 Titre de la leçon</h4>
             <div className="grid md:grid-cols-4 gap-2">
@@ -791,7 +919,6 @@ Questions :
             </div>
           </div>
 
-          {/* Sections */}
           {preview.sections.map((section, si) => (
             <div key={si} className="p-5 rounded-2xl border border-gray-200 bg-white">
               <div className="flex items-center justify-between mb-3">
@@ -837,6 +964,7 @@ Questions :
               </button>
             </div>
           ))}
+
           <button
             onClick={addSection}
             className="w-full py-2.5 rounded-xl border-2 border-dashed border-purple-300 text-purple-600 font-bold text-sm hover:bg-purple-50"
@@ -844,7 +972,6 @@ Questions :
             + Ajouter une section de vocabulaire
           </button>
 
-          {/* Quiz */}
           {preview.quiz.length > 0 && (
             <div className="p-5 rounded-2xl border border-purple-200 bg-purple-50">
               <h4 className="font-bold text-purple-900 mb-3">🎯 Questions de quiz ({preview.quiz.length})</h4>
@@ -893,7 +1020,6 @@ Questions :
             </div>
           )}
 
-          {/* Actions */}
           <div className="sticky bottom-4 flex flex-wrap gap-2 p-3 rounded-2xl bg-white shadow-2xl border-2 border-purple-300">
             <button onClick={reset} className="px-5 py-3 rounded-xl bg-gray-100 text-gray-700 font-bold hover:bg-gray-200">
               ← Recommencer
@@ -917,11 +1043,27 @@ Questions :
       {/* ====================== ÉTAPE 4 : BATCH PREVIEW ====================== */}
       {step === "batch-preview" && (
         <div className="p-5 rounded-2xl border border-gray-200 bg-white">
-          <h4 className="font-bold text-gray-900 mb-3">📦 {batchPreviews.length} leçons générées</h4>
+          <h4 className="font-bold text-gray-900 mb-3">📦 {batchPreviews.length} leçon(s) générée(s)</h4>
+
+          {batchErrors.length > 0 && (
+            <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-300 text-xs text-amber-800">
+              <b>⚠️ {batchErrors.length} fichier(s) en échec :</b>
+              <ul className="mt-1 ml-4 list-disc">
+                {batchErrors.map((e, i) => (
+                  <li key={i}>
+                    <b>{e.file}</b> — {e.error}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="space-y-2 max-h-64 overflow-auto">
             {batchPreviews.map((p, i) => (
               <div key={i} className="p-3 rounded-lg border border-gray-200 text-sm">
-                <div className="font-bold">{p.lesson.titre} · {p.lesson.zh} ({p.lesson.pinyin})</div>
+                <div className="font-bold">
+                  {p.lesson.titre} · {p.lesson.zh} ({p.lesson.pinyin})
+                </div>
                 <div className="text-xs text-gray-500">
                   {p.sections.reduce((a, s) => a + s.vocab.length, 0)} mots · {p.quiz.length} quiz
                 </div>
@@ -955,10 +1097,16 @@ Questions :
             </span>
           </p>
           <div className="flex gap-2 justify-center">
-            <button onClick={reset} className="px-6 py-3 rounded-xl bg-white border-2 border-green-400 text-green-700 font-bold hover:bg-green-50">
+            <button
+              onClick={reset}
+              className="px-6 py-3 rounded-xl bg-white border-2 border-green-400 text-green-700 font-bold hover:bg-green-50"
+            >
               ➕ Créer une autre leçon
             </button>
-            <button onClick={() => window.location.reload()} className="px-6 py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow">
+            <button
+              onClick={() => window.location.reload()}
+              className="px-6 py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow"
+            >
               🔄 Recharger maintenant
             </button>
           </div>
