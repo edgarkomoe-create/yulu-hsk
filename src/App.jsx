@@ -1077,7 +1077,7 @@ const NAV = [
   ["don", "❤️ Fondation"],
 ];
 
-function Header({ active, onNav, progress, onHome, cloudUser, onLogout }) {
+function Header({ active, onNav, progress, onHome, cloudUser, onLogout, onLogin }) {
   const level = Math.floor(progress.xp / 100) + 1;
   const into = progress.xp % 100;
   const streak = computeStreak(progress.history);
@@ -1103,16 +1103,20 @@ function Header({ active, onNav, progress, onHome, cloudUser, onLogout }) {
             <button
               onClick={onLogout}
               className="px-3 py-1.5 rounded-xl bg-green-50 border border-green-300 text-center hover:bg-green-100 transition-colors"
-              title={`Connecté : ${cloudUser.email}`}
+              title={`Connecté : ${cloudUser.email} — cliquer pour se déconnecter`}
             >
               <div className="text-sm font-bold text-green-600">☁️</div>
               <div className="text-[10px] text-green-700">sync</div>
             </button>
           ) : (
-            <div className="px-3 py-1.5 rounded-xl bg-gray-50 border border-gray-200 text-center" title="Non connecté — progression locale">
-              <div className="text-sm font-bold text-gray-400">☁️</div>
-              <div className="text-[10px] text-gray-400">local</div>
-            </div>
+            <button
+              onClick={onLogin}
+              className="px-3 py-1.5 rounded-xl bg-red-50 border border-red-300 text-center hover:bg-red-100 transition-colors"
+              title="Se connecter pour synchroniser"
+            >
+              <div className="text-sm font-bold text-red-600">☁️</div>
+              <div className="text-[10px] text-red-700">connexion</div>
+            </button>
           )}
           <div className="px-3 py-1.5 rounded-xl bg-orange-50 border border-orange-200 text-center">
             <div className="text-sm font-bold text-orange-600">🔥 {streak}</div>
@@ -2566,7 +2570,6 @@ function Don({ progress, setDonor, addDonation, donateCoins }) {
       amount_fcfa: Number(form.montant),
       status: "pending",
     };
-    // Enregistrement local
     addDonation({
       ref: form.ref.trim(),
       nom: form.nom.trim(),
@@ -2576,7 +2579,6 @@ function Don({ progress, setDonor, addDonation, donateCoins }) {
       date: todayKey(),
       statut: "en attente de vérification",
     });
-    // Enregistrement cloud
     const res = await saveDonationToCloud(donation);
     if (!res.ok) console.warn("Don non envoyé au cloud :", res.error);
     setDonor(true);
@@ -2777,180 +2779,6 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
   );
 }
 
-function Admin({ progress, setDonor, setGoal, addXp }) {
-  const [pinInput, setPinInput] = useState("");
-  const [authed, setAuthed] = useState(false);
-  const [section, setSection] = useState("studio");
-  const [toast, setToast] = useState("");
-  const [settings, setSettings] = useState(getSettings());
-  const [catalog, setCatalog] = useState(() => {
-    try { return Object.assign({ lessons: [], quiz: [], vocab: [] }, JSON.parse(localStorage.getItem(CATALOG_KEY) || "{}")); }
-    catch (e) { return { lessons: [], quiz: [], vocab: [] }; }
-  });
-
-  const notify = (m) => { setToast(m); setTimeout(() => setToast(""), 3000); };
-  const persistCatalog = (next) => { setCatalog(next); try { localStorage.setItem(CATALOG_KEY, JSON.stringify(next)); } catch (e) {} };
-
-  if (!authed) {
-    return (
-      <div className="max-w-sm mx-auto p-6 rounded-2xl border border-gray-300 bg-white shadow text-center">
-        <div className="text-4xl mb-2">🔒</div>
-        <h3 className="font-bold text-gray-900 mb-1">Espace admin — YǔLù 语路</h3>
-        <input
-          type="password"
-          value={pinInput}
-          onChange={(e) => setPinInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && pinInput === ADMIN_PIN) setAuthed(true); }}
-          placeholder="Code PIN"
-          className="w-full px-4 py-2.5 rounded-xl border border-gray-300 text-center tracking-widest"
-        />
-        <button onClick={() => { if (pinInput === ADMIN_PIN) setAuthed(true); else notify("Code incorrect"); }} className="mt-3 w-full py-2.5 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800">Déverrouiller</button>
-        <p className="text-[10px] text-gray-400 mt-2">PIN : 2026</p>
-        {toast && <div className="mt-2 text-xs text-red-600">{toast}</div>}
-      </div>
-    );
-  }
-
-  const donations = progress.donations || [];
-
-  const SECTIONS = [
-    ["studio", "🎬 Studio IA"],
-    ["facturation", "💳 Facturation"],
-    ["dons", "🌊 Dons"],
-  ];
-
-  return (
-    <div className="space-y-4">
-      <div className="p-4 rounded-2xl bg-gray-900 text-white flex flex-wrap items-center gap-3">
-        <span className="text-2xl">⚙️</span>
-        <div className="mr-auto">
-          <div className="font-bold">Espace admin — YǔLù 语路</div>
-          <div className="text-xs opacity-70">Gère ton application</div>
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {SECTIONS.map(([id, label]) => (
-          <button key={id} onClick={() => setSection(id)} className={`px-3 py-2 rounded-xl text-xs md:text-sm font-medium ${section === id ? "bg-gray-900 text-white" : "bg-white border border-gray-300 text-gray-600 hover:border-gray-500"}`}>{label}</button>
-        ))}
-      </div>
-      {toast && <div className="p-3 rounded-xl bg-gray-900 text-white text-sm font-bold text-center">{toast}</div>}
-      {section === "studio" && (
-        <Studio
-          geminiKey={(() => { try { return localStorage.getItem(GEMINI_KEY_STORE) || ""; } catch (e) { return ""; } })()}
-          existingLessons={ALL_LESSONS}
-          onPublish={(lessonData) => {
-            const newCatalog = {
-              ...catalog,
-              lessons: [
-                ...catalog.lessons,
-                {
-                  id: lessonData.lesson.id,
-                  titre: lessonData.lesson.titre,
-                  zh: lessonData.lesson.zh,
-                  pinyin: lessonData.lesson.pinyin,
-                  fr: lessonData.lesson.fr,
-                  sections: lessonData.sections,
-                  phrases: lessonData.phrases,
-                  pinyinNotes: lessonData.pinyinNotes,
-                  caracteres: lessonData.caracteres,
-                },
-              ],
-              quiz: [...catalog.quiz, ...lessonData.quiz],
-            };
-            persistCatalog(newCatalog);
-            try {
-              const dialoguesKey = "hsk1-dialogues-custom-v1";
-              const existing = JSON.parse(localStorage.getItem(dialoguesKey) || "{}");
-              if (lessonData.dialogues?.length) {
-                existing[lessonData.lesson.id] = lessonData.dialogues;
-                localStorage.setItem(dialoguesKey, JSON.stringify(existing));
-              }
-            } catch (e) {}
-            notify(`✅ "${lessonData.lesson.titre}" publiée !`);
-          }}
-        />
-      )}
-      {section === "facturation" && (
-        <div className="p-5 rounded-2xl border border-gray-200 bg-white space-y-4">
-          <h4 className="font-bold text-gray-900">💳 Facturation, limites & version</h4>
-          <div className="p-4 rounded-xl border border-cyan-200 bg-cyan-50">
-            <b className="text-sm">Version actuelle : {settings.billingOn ? "Payante" : "Gratuite (test)"}</b>
-            <button
-              onClick={() => { const s = { ...settings, billingOn: !settings.billingOn }; setSettings(s); saveSettings(s); }}
-              className={`block mt-2 px-4 py-2 rounded-xl text-white text-sm font-bold ${settings.billingOn ? "bg-gray-500" : "bg-cyan-600 hover:bg-cyan-700"}`}
-            >
-              {settings.billingOn ? "↩️ Revenir en free" : "🚀 Activer la facturation"}
-            </button>
-          </div>
-          <div>
-            <label className="text-sm font-bold text-gray-800">Questions IA gratuites / jour</label>
-            <div className="flex gap-2 mt-1">
-              {[3, 5, 10, 20].map((n) => (
-                <button key={n} onClick={() => { const s = { ...settings, aiFreePerDay: n }; setSettings(s); saveSettings(s); }} className={`px-4 py-2 rounded-xl border text-sm font-bold ${settings.aiFreePerDay === n ? "bg-gray-900 text-white border-gray-900" : "bg-white border-gray-300"}`}>{n}</button>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label className="text-sm font-bold text-gray-800">Lien Wave</label>
-            <input value={localStorage.getItem(WAVE_LINK_STORE) || ""} onChange={(e) => { try { localStorage.setItem(WAVE_LINK_STORE, e.target.value); } catch (er) {} }} className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 text-sm" placeholder="https://pay.wave.com/m/..." />
-          </div>
-          <div>
-            <label className="text-sm font-bold text-gray-800">Objectif XP/jour</label>
-            <div className="flex gap-2 mt-1">
-              {[20, 40, 60, 100].map((n) => (<button key={n} onClick={() => setGoal(n)} className="px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm font-bold">{n}</button>))}
-            </div>
-          </div>
-        </div>
-      )}
-      {section === "dons" && (
-        <div className="p-5 rounded-2xl border border-gray-200 bg-white">
-          <h4 className="font-bold text-gray-900 mb-1">🌊 Dons reçus (Wave)</h4>
-          <p className="text-xs text-gray-500 mb-3">Vérifie chaque référence, puis valide le premium du donateur.</p>
-          {donations.length === 0 ? (
-            <p className="text-sm text-gray-400">Aucun don enregistré.</p>
-          ) : (
-            <div className="space-y-2">
-              {donations.map((d, i) => (
-                <div key={i} className="p-3 rounded-xl border border-gray-200 bg-gray-50 text-sm">
-                  <div className="flex justify-between font-bold text-gray-900">
-                    <span>{d.nom} — {d.montant} FCFA</span>
-                    <span className={d.statut === "validé" ? "text-green-600" : d.statut === "rejeté" ? "text-red-500" : "text-amber-600"}>{d.statut}</span>
-                  </div>
-                  <div className="text-xs text-gray-500">Réf : {d.ref} · Wave : {d.wave} · {d.date}</div>
-                  <div className="flex gap-2 mt-2">
-                    <button onClick={() => {
-                      const next = [...donations];
-                      next[i] = { ...d, statut: "validé" };
-                      setDonor(true);
-                      try {
-                        const raw = JSON.parse(localStorage.getItem(STORE_KEY));
-                        raw.donations = next;
-                        localStorage.setItem(STORE_KEY, JSON.stringify(raw));
-                        window.location.reload();
-                      } catch (e) {}
-                    }} className="px-3 py-1 rounded-lg bg-green-600 text-white text-xs font-bold">✓ Valider</button>
-                    <button onClick={() => {
-                      const next = [...donations];
-                      next[i] = { ...d, statut: "rejeté" };
-                      try {
-                        const raw = JSON.parse(localStorage.getItem(STORE_KEY));
-                        raw.donations = next;
-                        raw.donor = false;
-                        localStorage.setItem(STORE_KEY, JSON.stringify(raw));
-                        window.location.reload();
-                      } catch (e) {}
-                    }} className="px-3 py-1 rounded-lg bg-red-500 text-white text-xs font-bold">✕ Rejeter</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function lastNDays(history, n) {
   const arr = [];
   const now = Date.now();
@@ -3066,71 +2894,14 @@ export default function App() {
 
   const { progress, addXp, completeNode, setGoal, addCoins, donateCoins, spendCoins, buyAvatar, setDonor, addDonation, registerAI, aiUsedToday } = useProgress();
 
-  // ============================== CLOUD SYNC ==============================
+  // ============================== STATES ==============================
   const [cloudUser, setCloudUser] = useState(null);
   const [cloudReady, setCloudReady] = useState(false);
+  const [hasLoadedCloud, setHasLoadedCloud] = useState(false);
+  const [authPending, setAuthPending] = useState(false);
   const lastSyncRef = useRef(0);
 
-  useEffect(() => {
-    if (!supabase) {
-      setCloudReady(true);
-      return;
-    }
-    (async () => {
-      const u = await getCurrentUser();
-      setCloudUser(u);
-      setCloudReady(true);
-    })();
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      setCloudUser(session?.user || null);
-    });
-    return () => listener?.subscription?.unsubscribe?.();
-  }, []);
-
-  const [hasLoadedCloud, setHasLoadedCloud] = useState(false);
-  useEffect(() => {
-    if (!cloudUser || hasLoadedCloud) return;
-    (async () => {
-      const cloudData = await loadProgressFromCloud(cloudUser.id);
-      if (cloudData) {
-        console.log("☁️ Progression chargée depuis le cloud");
-        try {
-          const raw = localStorage.getItem(STORE_KEY);
-          const local = raw ? JSON.parse(raw) : {};
-          const merged = {
-            ...local,
-            ...cloudData,
-            xp: Math.max(local.xp || 0, cloudData.xp || 0),
-            coins: Math.max(local.coins || 0, cloudData.coins || 0),
-            pot: Math.max(local.pot || 0, cloudData.pot || 0),
-            nodes: { ...(cloudData.nodes || {}), ...(local.nodes || {}) },
-            history: { ...(cloudData.history || {}), ...(local.history || {}) },
-          };
-          localStorage.setItem(STORE_KEY, JSON.stringify(merged));
-          window.dispatchEvent(new Event("hsk1-cloud-loaded"));
-        } catch (e) {}
-      }
-      setHasLoadedCloud(true);
-    })();
-  }, [cloudUser, hasLoadedCloud]);
-
-  useEffect(() => {
-    if (!cloudUser || !progress) return;
-    const now = Date.now();
-    if (now - lastSyncRef.current < 5000) return;
-    lastSyncRef.current = now;
-    syncProgressToCloud(cloudUser.id, progress);
-  }, [progress, cloudUser]);
-
-  const handleLogout = async () => {
-    if (!window.confirm("Se déconnecter ? (ta progression est sauvegardée)")) return;
-    await signOut();
-    setCloudUser(null);
-    setHasLoadedCloud(false);
-  };
-
-  // ============================== ROUTER ==============================
-    const [appMode, setAppMode] = useState(() => {
+  const [appMode, setAppMode] = useState(() => {
     // 🔒 Détection URL admin secrète
     if (typeof window !== "undefined" && window.location.hash === "#studio-2026") {
       return "admin";
@@ -3159,6 +2930,93 @@ export default function App() {
 
   const activeNode = nodeId ? NODES.find((n) => n.id === nodeId) : null;
 
+  // ============================== CLOUD SYNC ==============================
+  useEffect(() => {
+    if (!supabase) {
+      setCloudReady(true);
+      return;
+    }
+    // 1. Session initiale
+    (async () => {
+      const u = await getCurrentUser();
+      setCloudUser(u);
+      setCloudReady(true);
+      if (u) {
+        setAppMode("app");
+        setAuthPending(false);
+      }
+    })();
+
+    // 2. Écoute des événements d'auth
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        console.log("🔔 Auth event:", event);
+        const user = session?.user || null;
+        setCloudUser(user);
+        if (event === "SIGNED_IN" && user) {
+          setAppMode("app");
+          setAuthPending(false);
+          setHasLoadedCloud(false);
+        }
+        if (event === "SIGNED_OUT") {
+          setCloudUser(null);
+          setHasLoadedCloud(false);
+        }
+      }
+    );
+    return () => listener?.subscription?.unsubscribe?.();
+  }, []);
+
+  // 3. Chargement cloud au premier login
+  useEffect(() => {
+    if (!cloudUser || hasLoadedCloud) return;
+    (async () => {
+      const cloudData = await loadProgressFromCloud(cloudUser.id);
+      if (cloudData) {
+        console.log("☁️ Progression chargée depuis le cloud");
+        try {
+          const raw = localStorage.getItem(STORE_KEY);
+          const local = raw ? JSON.parse(raw) : {};
+          const merged = {
+            ...local,
+            ...cloudData,
+            xp: Math.max(local.xp || 0, cloudData.xp || 0),
+            coins: Math.max(local.coins || 0, cloudData.coins || 0),
+            pot: Math.max(local.pot || 0, cloudData.pot || 0),
+            nodes: { ...(cloudData.nodes || {}), ...(local.nodes || {}) },
+            history: { ...(cloudData.history || {}), ...(local.history || {}) },
+          };
+          localStorage.setItem(STORE_KEY, JSON.stringify(merged));
+          window.dispatchEvent(new Event("hsk1-cloud-loaded"));
+        } catch (e) {}
+      }
+      setHasLoadedCloud(true);
+    })();
+  }, [cloudUser, hasLoadedCloud]);
+
+  // 4. Sync cloud (throttlé à 5s)
+  useEffect(() => {
+    if (!cloudUser || !progress) return;
+    const now = Date.now();
+    if (now - lastSyncRef.current < 5000) return;
+    lastSyncRef.current = now;
+    syncProgressToCloud(cloudUser.id, progress);
+  }, [progress, cloudUser]);
+
+  const handleLogout = async () => {
+    if (
+      !window.confirm(
+        "Se déconnecter ?\n\nTa progression locale est conservée. Tu pourras te reconnecter avec ton email."
+      )
+    )
+      return;
+    await signOut();
+    setCloudUser(null);
+    setHasLoadedCloud(false);
+    setAppMode("landing");
+  };
+
+  // ============================== ACTIONS ==============================
   const launch = (node) => {
     setNodeId(node.id);
     setNodeLesson(node.lesson);
@@ -3187,6 +3045,7 @@ export default function App() {
     }
   };
 
+  // ============================== ROUTER ==============================
   if (appMode === "landing") {
     return (
       <Landing
@@ -3207,7 +3066,21 @@ export default function App() {
     );
   }
 
-    // 🔒 ROUTE ADMIN SÉCURISÉE (URL secrète uniquement)
+  // 📧 ROUTE AUTH — Connexion magic link Supabase
+  if (appMode === "auth") {
+    return (
+      <AuthScreen
+        onSuccess={() => setAuthPending(true)}
+        onSkip={() => {
+          localStorage.setItem("hsk1-auth-skipped-v1", "true");
+          setAppMode("app");
+        }}
+        onBack={() => setAppMode("onboarding")}
+      />
+    );
+  }
+
+  // 🔒 ROUTE ADMIN SÉCURISÉE (URL secrète uniquement)
   if (appMode === "admin") {
     return (
       <AdminPanel
@@ -3234,6 +3107,7 @@ export default function App() {
         progress={progress}
         cloudUser={cloudUser}
         onLogout={handleLogout}
+        onLogin={() => setAppMode("auth")}
       />
 
       {activeNode && (
