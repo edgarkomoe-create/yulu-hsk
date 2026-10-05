@@ -234,7 +234,7 @@ export default function Studio({ onPublish, existingLessons, geminiKey }) {
     const mimeType = photoFile.type || "image/jpeg";
 
     const res = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" +
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" +
         encodeURIComponent(geminiKey),
       {
         method: "POST",
@@ -400,7 +400,7 @@ RÉPONDS UNIQUEMENT AVEC LE JSON.`;
     console.log("🤖 Appel Gemini, longueur prompt:", prompt.length);
 
     const res = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" +
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" +
         encodeURIComponent(geminiKey),
       {
         method: "POST",
