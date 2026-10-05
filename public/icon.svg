@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <circle cx="256" cy="256" r="256" fill="#dc2626"/>
+  <circle cx="256" cy="256" r="210" fill="#ffffff" opacity="0.12"/>
+  <text x="256" y="345" font-size="270" text-anchor="middle" fill="#ffffff" font-family="serif">语</text>
+</svg>
