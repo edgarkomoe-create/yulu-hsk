@@ -3267,8 +3267,9 @@ export default function App() {
       {view === "don" && <Don progress={progress} setDonor={setDonor} addDonation={addDonation} donateCoins={donateCoins} />}
       {view === "pronon" && <Prononciation addXp={addXp} addCoins={addCoins} unlockedLessons={unlockedLessons} />}
 
-            <div className="mt-8 text-center text-xs text-gray-400">
+      <div className="mt-8 text-center text-xs text-gray-400">
         <div>加油！Jiāyóu ! — Propulsé par <b>Kimatey Enterprise</b> · 15% reversés à la VIE Foundation ❤️</div>
-      </div>>
+      </div>
+    </div>
   );
 }
