@@ -2,6 +2,57 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import Studio from "./Studio.jsx";
 
+// ============================== FALLBACK GEMINI AUTOMATIQUE ==============================
+const GEMINI_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-2.5-flash",
+  "gemini-1.5-flash",
+  "gemini-flash-latest",
+];
+
+async function callGeminiWithFallback(body, apiKey, isJSON = true) {
+  let lastError = null;
+  for (const model of GEMINI_MODELS) {
+    try {
+      console.log(`🤖 App : tentative avec ${model}…`);
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=` +
+          encodeURIComponent(apiKey),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }
+      );
+      const data = await res.json();
+      if (data.error) {
+        console.warn(`⚠️ ${model} échoué :`, data.error.message);
+        lastError = new Error(data.error.message || "erreur API");
+        continue;
+      }
+      const parts = (((data.candidates || [])[0] || {}).content || {}).parts;
+      if (!parts || !parts[0] || !parts[0].text) {
+        lastError = new Error("réponse vide");
+        continue;
+      }
+      console.log(`✅ App : réponse reçue de ${model}`);
+      let txt = parts[0].text.trim();
+      if (isJSON) {
+        txt = txt.replace(/^```(json)?/i, "").replace(/```$/, "").trim();
+        const s = txt.indexOf("{");
+        const e = txt.lastIndexOf("}");
+        if (s >= 0 && e > s) txt = txt.slice(s, e + 1);
+        return JSON.parse(txt);
+      }
+      return txt;
+    } catch (e) {
+      console.warn(`⚠️ ${model} erreur :`, e.message);
+      lastError = e;
+    }
+  }
+  throw lastError || new Error("Tous les modèles Gemini sont indisponibles");
+}
+
 // ============================== DONNÉES DES COURS ==============================
 
 const LESSONS = [
@@ -653,7 +704,6 @@ const CHARS = [
 const STORE_KEY = "hsk1-campus-chinois-v1";
 const TONE_COLORS = ["#dc2626", "#ea580c", "#16a34a", "#2563eb"];
 
-// ---------- CATALOGUE ADMINISTRABLE ----------
 const CATALOG_KEY = "hsk1-catalog-v1";
 function loadCustomCatalog() {
   try {
@@ -680,7 +730,6 @@ const ALL_VOCAB = ALL_LESSONS.flatMap((l) =>
   l.sections.flatMap((s) => s.vocab.map((v) => ({ ...v, lesson: l.id })))
 ).filter((v) => !v.hanzi.includes("……") && !v.hanzi.includes("/"));
 
-// ---------- RÉGLAGES & SUIVI ----------
 const SETTINGS_KEY = "hsk1-settings-v1";
 const MISSES_KEY = "hsk1-misses-v1";
 const PRON_KEY = "hsk1-pron-v1";
@@ -692,10 +741,7 @@ const FREE_AI_PER_DAY = 5;
 
 function getSettings() {
   try {
-    return Object.assign(
-      { aiFreePerDay: 5, billingOn: false },
-      JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}")
-    );
+    return Object.assign({ aiFreePerDay: 5, billingOn: false }, JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"));
   } catch (e) {
     return { aiFreePerDay: 5, billingOn: false };
   }
@@ -733,27 +779,14 @@ function getPronHist() {
   try { return JSON.parse(localStorage.getItem(PRON_KEY) || "{}"); } catch (e) { return {}; }
 }
 async function askGeminiJSON(prompt, apiKey) {
-  const res = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" +
-      encodeURIComponent(apiKey),
+  return callGeminiWithFallback(
     {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.7 },
-      }),
-    }
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.7 },
+    },
+    apiKey,
+    true
   );
-  const data = await res.json();
-  const parts = (((data.candidates || [])[0] || {}).content || {}).parts;
-  if (!parts || !parts[0] || !parts[0].text) throw new Error("réponse vide");
-  let txt = parts[0].text.trim();
-  txt = txt.replace(/^```(json)?/i, "").replace(/```$/, "").trim();
-  const s = txt.indexOf("{");
-  const e = txt.lastIndexOf("}");
-  if (s >= 0 && e > s) txt = txt.slice(s, e + 1);
-  return JSON.parse(txt);
 }
 
 const NODES = [];
@@ -848,10 +881,7 @@ function useProgress() {
     setProgress((p) => {
       const prev = p.nodes[id] || {};
       const isNew = !prev.done;
-      const nodes = {
-        ...p.nodes,
-        [id]: { done: true, best: Math.max(prev.best || 0, pct || 0) },
-      };
+      const nodes = { ...p.nodes, [id]: { done: true, best: Math.max(prev.best || 0, pct || 0) } };
       const gain = isNew ? def.xp : Math.round(def.xp * 0.25);
       const k = todayKey();
       return {
@@ -938,27 +968,19 @@ function useProgress() {
 
 let _cachedVoice = null;
 let _voiceLoadPromise = null;
-let _voicesReady = false;
 
 function loadVoices() {
   return new Promise((resolve) => {
     const synth = typeof window !== "undefined" ? window.speechSynthesis : null;
     if (!synth) return resolve([]);
     const existing = synth.getVoices();
-    if (existing.length) {
-      _voicesReady = true;
-      return resolve(existing);
-    }
+    if (existing.length) return resolve(existing);
     const handler = () => {
       synth.removeEventListener("voiceschanged", handler);
-      _voicesReady = true;
       resolve(synth.getVoices());
     };
     synth.addEventListener("voiceschanged", handler);
-    setTimeout(() => {
-      _voicesReady = true;
-      resolve(synth.getVoices());
-    }, 1500);
+    setTimeout(() => resolve(synth.getVoices()), 1500);
   });
 }
 
@@ -969,7 +991,6 @@ async function pickBestChineseVoice() {
   _voiceLoadPromise = (async () => {
     const voices = await loadVoices();
     if (!voices.length) return null;
-
     const priorities = [
       (v) => v.lang === "zh-CN" && /Google/i.test(v.name),
       (v) => v.lang === "zh-CN" && /Microsoft (Xiaoxiao|Yunxi|Xiaoyi|Huihui|Kangkang|Yaoyao)/i.test(v.name),
@@ -977,7 +998,6 @@ async function pickBestChineseVoice() {
       (v) => v.lang === "zh-CN" || v.lang === "zh_CN",
       (v) => v.lang && v.lang.toLowerCase().startsWith("zh"),
     ];
-
     for (const test of priorities) {
       const found = voices.find(test);
       if (found) {
@@ -986,7 +1006,7 @@ async function pickBestChineseVoice() {
         return found;
       }
     }
-    console.warn("⚠️ Aucune voix chinoise trouvée. Voix disponibles :", voices.map((v) => `${v.name} (${v.lang})`));
+    console.warn("⚠️ Aucune voix chinoise trouvée.");
     return null;
   })();
 
@@ -997,17 +1017,10 @@ async function speak(text, rate) {
   try {
     const synth = typeof window !== "undefined" ? window.speechSynthesis : null;
     if (!synth) return false;
-
-    const cleanText = String(text)
-      .replace(/……/g, "")
-      .replace(/[…]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
+    const cleanText = String(text).replace(/……/g, "").replace(/[…]/g, "").replace(/\s+/g, " ").trim();
     if (!cleanText) return false;
-
     synth.cancel();
     await new Promise((r) => setTimeout(r, 60));
-
     const voice = await pickBestChineseVoice();
     const u = new SpeechSynthesisUtterance(cleanText);
     u.lang = voice ? voice.lang : "zh-CN";
@@ -1015,17 +1028,12 @@ async function speak(text, rate) {
     u.pitch = 1.0;
     u.volume = 1.0;
     if (voice) u.voice = voice;
-
     u.onerror = (e) => {
-      if (e.error && e.error !== "interrupted" && e.error !== "canceled") {
-        console.warn("Erreur TTS :", e.error);
-      }
+      if (e.error && e.error !== "interrupted" && e.error !== "canceled") console.warn("TTS :", e.error);
     };
-
     synth.speak(u);
     return true;
   } catch (e) {
-    console.warn("speak() échec :", e);
     return false;
   }
 }
@@ -1033,16 +1041,13 @@ async function speak(text, rate) {
 function preloadVoices() {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
   window.speechSynthesis.getVoices();
-  window.speechSynthesis.onvoiceschanged = () => {
-    pickBestChineseVoice();
-  };
+  window.speechSynthesis.onvoiceschanged = () => pickBestChineseVoice();
   setTimeout(() => pickBestChineseVoice(), 300);
 }
 
 function EcouterBtn({ text, slow, label }) {
   const [loading, setLoading] = useState(false);
   const [playing, setPlaying] = useState(false);
-
   const handleClick = async () => {
     if (loading) return;
     setLoading(true);
@@ -1054,18 +1059,15 @@ function EcouterBtn({ text, slow, label }) {
       setTimeout(() => setPlaying(false), dur);
     }
   };
-
   const base = "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-semibold transition-all active:scale-95 disabled:opacity-60";
   const style = slow
     ? "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 hover:border-amber-400"
     : "border-red-300 bg-red-50 text-red-700 hover:bg-red-100 hover:border-red-400";
-
   return (
     <button
       onClick={handleClick}
       disabled={loading}
       className={`${base} ${style} ${playing ? "ring-2 ring-offset-1 ring-red-300 animate-pulse" : ""}`}
-      title={slow ? "Écouter lentement" : "Écouter"}
     >
       {loading ? (
         <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
@@ -1079,7 +1081,6 @@ function EcouterBtn({ text, slow, label }) {
 
 function VoiceDiagnostic() {
   const [info, setInfo] = useState(null);
-
   const run = async () => {
     const voices = await loadVoices();
     const zh = voices.filter((v) => v.lang && v.lang.toLowerCase().startsWith("zh"));
@@ -1091,7 +1092,6 @@ function VoiceDiagnostic() {
       all: zh.map((v) => `${v.name} (${v.lang})`),
     });
   };
-
   return (
     <div className="p-3 rounded-xl bg-gray-50 border border-gray-200 text-xs">
       <button onClick={run} className="font-bold text-gray-700 hover:text-red-600">
@@ -1105,17 +1105,7 @@ function VoiceDiagnostic() {
           {info.best ? (
             <div className="text-green-700">✓ Meilleure voix : <b>{info.best}</b></div>
           ) : (
-            <div className="text-red-600">
-              ✗ Aucune voix chinoise détectée. Installe-en une : Windows → Paramètres → Heure et langue → Voix → Ajouter 中文（中国）
-            </div>
-          )}
-          {info.all.length > 0 && (
-            <details>
-              <summary className="cursor-pointer text-gray-500">Voir les {info.all.length} voix chinoises</summary>
-              <ul className="mt-1 pl-3 text-[10px] text-gray-500 list-disc">
-                {info.all.map((v, i) => <li key={i}>{v}</li>)}
-              </ul>
-            </details>
+            <div className="text-red-600">✗ Aucune voix chinoise détectée.</div>
           )}
         </div>
       )}
@@ -1194,10 +1184,7 @@ function Header({ active, onNav, progress }) {
       <div className="mb-2 flex items-center gap-2 text-xs text-gray-500">
         <span>🎯 Objectif du jour : <b className="text-gray-700">{todayXp} / {progress.goal || 40} XP</b></span>
         <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all ${goalPct >= 100 ? "bg-green-500" : "bg-red-500"}`}
-            style={{ width: goalPct + "%" }}
-          />
+          <div className={`h-full rounded-full transition-all ${goalPct >= 100 ? "bg-green-500" : "bg-red-500"}`} style={{ width: goalPct + "%" }} />
         </div>
         {goalPct >= 100 && <span className="text-green-600 font-bold">✅ atteint !</span>}
       </div>
@@ -1246,8 +1233,6 @@ function LessonChips({ value, onChange, allLabel }) {
   );
 }
 
-// ============================== FICHES ==============================
-
 function Fiche({ vocab, index }) {
   const [flipped, setFlipped] = useState(false);
   return (
@@ -1276,10 +1261,7 @@ function Fiches({ presetLesson, onReviewDone }) {
     <div>
       <LessonChips value={lessonId} onChange={setLessonId} />
       {onReviewDone && (
-        <button
-          onClick={() => onReviewDone(100)}
-          className="mb-4 w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow"
-        >
+        <button onClick={() => onReviewDone(100)} className="mb-4 w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow">
           ✅ J'ai révisé cette leçon — valider (+5 XP)
         </button>
       )}
@@ -1318,25 +1300,19 @@ function Fiches({ presetLesson, onReviewDone }) {
         <div className="p-5 rounded-xl border border-amber-200 bg-amber-50">
           <h4 className="font-bold text-amber-900 mb-2">🔤 Pinyin & règles</h4>
           <ul className="space-y-2 text-sm text-gray-700 list-disc list-inside">
-            {lesson.pinyinNotes.map((n, i) => (
-              <li key={i}>{n}</li>
-            ))}
+            {lesson.pinyinNotes.map((n, i) => (<li key={i}>{n}</li>))}
           </ul>
         </div>
       </div>
       <div className="p-5 rounded-xl border border-green-200 bg-green-50 mb-4">
         <h4 className="font-bold text-green-900 mb-2">✍️ Caractères</h4>
         <ul className="space-y-2 text-sm text-gray-700 list-disc list-inside">
-          {lesson.caracteres.map((c, i) => (
-            <li key={i}>{c}</li>
-          ))}
+          {lesson.caracteres.map((c, i) => (<li key={i}>{c}</li>))}
         </ul>
       </div>
     </div>
   );
 }
-
-// ============================== QUIZ ÉCRIT ==============================
 
 function Quiz({ presetLesson, onDone }) {
   const [lessonFilter, setLessonFilter] = useState(presetLesson != null ? presetLesson : "all");
@@ -1398,13 +1374,11 @@ function Quiz({ presetLesson, onDone }) {
 
   if (mode === "done") {
     const pct = questions.length > 0 ? Math.round((score / questions.length) * 100) : 0;
-    const msg = pct === 100 ? "完美！Parfait ! 🏆" : pct >= 70 ? "很好！Très bien ! 👏" : pct >= 50 ? "继续加油！Continue ! 💪" : "再复习一下！Révise les fiches et réessaie ! 📖";
+    const msg = pct === 100 ? "完美！Parfait ! 🏆" : pct >= 70 ? "很好！Très bien ! 👏" : pct >= 50 ? "继续加油！Continue ! 💪" : "再复习一下！Révise ! 📖";
     return (
       <div className="max-w-lg mx-auto p-6 rounded-2xl border border-gray-200 bg-white shadow">
         <div className="text-center mb-5">
-          <div className="text-5xl font-bold" style={{ color: TONE_COLORS[3] }}>
-            {score}/{questions.length}
-          </div>
+          <div className="text-5xl font-bold" style={{ color: TONE_COLORS[3] }}>{score}/{questions.length}</div>
           <div className="text-lg font-medium text-gray-700 mt-1">{msg}</div>
         </div>
         {wrong.length > 0 && (
@@ -1415,7 +1389,6 @@ function Quiz({ presetLesson, onDone }) {
                 <li key={i} className="text-sm text-gray-700">
                   <span className="font-medium">{q.question}</span>
                   <div className="text-red-700">✔ {q.options[q.answer]}</div>
-                  {q.explication && <div className="text-gray-500 italic text-xs">{q.explication}</div>}
                 </li>
               ))}
             </ul>
@@ -1428,15 +1401,8 @@ function Quiz({ presetLesson, onDone }) {
             </button>
           )}
           <div className="flex gap-2">
-            <button onClick={start} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700">
-              Refaire 🔁
-            </button>
-            <button
-              onClick={() => setMode("setup")}
-              className="flex-1 py-3 rounded-xl bg-gray-100 text-gray-700 font-bold hover:bg-gray-200"
-            >
-              Changer de leçon
-            </button>
+            <button onClick={start} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700">Refaire 🔁</button>
+            <button onClick={() => setMode("setup")} className="flex-1 py-3 rounded-xl bg-gray-100 text-gray-700 font-bold hover:bg-gray-200">Changer de leçon</button>
           </div>
         </div>
       </div>
@@ -1470,12 +1436,7 @@ function Quiz({ presetLesson, onDone }) {
               else cls = "border-gray-200 bg-white opacity-50";
             }
             return (
-              <button
-                key={i}
-                onClick={() => answer(i)}
-                disabled={answered}
-                className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}
-              >
+              <button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}>
                 {opt}
               </button>
             );
@@ -1484,9 +1445,8 @@ function Quiz({ presetLesson, onDone }) {
         {answered && (
           <div className="mt-4">
             <div className={`text-sm font-bold mb-2 ${correct ? "text-green-700" : "text-red-700"}`}>
-              {correct ? "✓ 对！Correct !" : `✗ 不对 — la réponse est : ${q.options[q.answer]}`}
+              {correct ? "✓ 对！Correct !" : `✗ 不对 — réponse : ${q.options[q.answer]}`}
             </div>
-            {q.explication && <div className="text-xs text-gray-500 italic mb-2">{q.explication}</div>}
             <button onClick={next} className="w-full py-3 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800 transition">
               {current + 1 >= questions.length ? "Voir le résultat →" : "Question suivante →"}
             </button>
@@ -1497,26 +1457,18 @@ function Quiz({ presetLesson, onDone }) {
   );
 }
 
-// ============================== ORAL ==============================
-
 function EcouteRepete() {
   const [lessonId, setLessonId] = useState(1);
   const lesson = ALL_LESSONS.find((l) => l.id === lessonId);
   const items = lesson.sections.flatMap((s) => s.vocab);
   const customDialogues = useMemo(() => {
-    try {
-      return JSON.parse(localStorage.getItem("hsk1-dialogues-custom-v1") || "{}");
-    } catch (e) {
-      return {};
-    }
+    try { return JSON.parse(localStorage.getItem("hsk1-dialogues-custom-v1") || "{}"); } catch (e) { return {}; }
   }, [lessonId]);
   const dialoguesForLesson = customDialogues[lessonId] || DIALOGUES[lessonId] || [];
   return (
     <div>
       <LessonChips value={lessonId} onChange={setLessonId} />
-      <p className="text-sm text-gray-500 mb-4">
-        🗣️ Écoute chaque mot, puis <b>répète à voix haute</b> en imitant le ton. Utilise 🐢 pour entendre lentement.
-      </p>
+      <p className="text-sm text-gray-500 mb-4">🗣️ Écoute chaque mot, puis <b>répète à voix haute</b> en imitant le ton.</p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-8">
         {items.map((v, i) => (
           <div key={i} className="flex items-center justify-between gap-2 p-3 rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -1532,7 +1484,7 @@ function EcouteRepete() {
           </div>
         ))}
       </div>
-      <h3 className="text-lg font-bold text-gray-800 mb-3">🎭 Dialogues — joue les deux rôles</h3>
+      <h3 className="text-lg font-bold text-gray-800 mb-3">🎭 Dialogues</h3>
       <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50 space-y-2 mb-4">
         {dialoguesForLesson.map((line, i) => (
           <div key={i} className={`flex items-center justify-between gap-2 p-2.5 rounded-lg ${line[0] === "A" ? "bg-white border border-indigo-100" : "bg-indigo-100"}`}>
@@ -1606,11 +1558,9 @@ function QuizEcoute({ presetLesson, onDone }) {
     return (
       <div className="max-w-lg mx-auto p-6 rounded-2xl border border-gray-200 bg-white shadow">
         <h3 className="text-xl font-bold text-gray-900 mb-1">Quiz d'écoute 👂</h3>
-        <p className="text-sm text-gray-500 mb-4">Tu entends un mot en chinois — choisis ce que tu as entendu.</p>
+        <p className="text-sm text-gray-500 mb-4">Tu entends un mot — choisis ce que tu as entendu.</p>
         <LessonChips value={lessonFilter} onChange={setLessonFilter} allLabel="Toutes" />
-        <button onClick={start} className="w-full py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700 shadow">
-          Commencer 🎧
-        </button>
+        <button onClick={start} className="w-full py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700 shadow">Commencer 🎧</button>
       </div>
     );
   }
@@ -1650,10 +1600,8 @@ function QuizEcoute({ presetLesson, onDone }) {
         <div className="h-2 bg-blue-600 rounded-full transition-all" style={{ width: `${((current + (answered ? 1 : 0)) / questions.length) * 100}%` }} />
       </div>
       <div className="p-6 rounded-2xl border border-gray-200 bg-white shadow text-center">
-        <p className="text-sm text-gray-500 mb-3">🎧 Écoute bien… quel est le mot que tu entends ?</p>
-        <button onClick={() => speak(q.item.hanzi)} className="w-24 h-24 rounded-full bg-blue-600 text-white text-4xl shadow-lg hover:bg-blue-700 mx-auto mb-5">
-          🔊
-        </button>
+        <p className="text-sm text-gray-500 mb-3">🎧 Écoute bien…</p>
+        <button onClick={() => speak(q.item.hanzi)} className="w-24 h-24 rounded-full bg-blue-600 text-white text-4xl shadow-lg hover:bg-blue-700 mx-auto mb-5">🔊</button>
         <div className="space-y-2">
           {q.opts.map((opt, i) => {
             let cls = "border-gray-200 bg-white hover:border-red-400";
@@ -1663,15 +1611,9 @@ function QuizEcoute({ presetLesson, onDone }) {
               else cls = "border-gray-200 bg-white opacity-50";
             }
             return (
-              <button
-                key={i}
-                onClick={() => answer(i)}
-                disabled={answered}
-                className={`w-full px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}
-              >
+              <button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}>
                 <span className="text-lg">{opt.hanzi}</span>
                 <span className="text-red-600 ml-2">{opt.pinyin}</span>
-                {answered && i === q.answer && <span className="block text-xs text-gray-500">{opt.fr}</span>}
               </button>
             );
           })}
@@ -1679,7 +1621,7 @@ function QuizEcoute({ presetLesson, onDone }) {
         {answered && (
           <div className="mt-4">
             <div className={`text-sm font-bold mb-2 ${correct ? "text-green-700" : "text-red-700"}`}>
-              {correct ? "✓ 对！Correct !" : "✗ La bonne réponse était affichée en vert."}
+              {correct ? "✓ 对！Correct !" : "✗ La bonne réponse était en vert."}
             </div>
             <button onClick={next} className="w-full py-3 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800">
               {current + 1 >= questions.length ? "Résultat →" : "Suivant →"}
@@ -1693,38 +1635,28 @@ function QuizEcoute({ presetLesson, onDone }) {
 
 function Oral({ presetLesson, onDone }) {
   const [mode, setMode] = useState("repeter");
-  if (presetLesson != null) {
-    return <QuizEcoute presetLesson={presetLesson} onDone={onDone} />;
-  }
+  if (presetLesson != null) return <QuizEcoute presetLesson={presetLesson} onDone={onDone} />;
   return (
     <div>
       <div className="flex gap-2 mb-6">
         <button
           onClick={() => setMode("repeter")}
-          className={`px-4 py-2 rounded-full text-sm font-medium border ${
-            mode === "repeter" ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300"
-          }`}
+          className={`px-4 py-2 rounded-full text-sm font-medium border ${mode === "repeter" ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300"}`}
         >
           🔁 Écoute & répète
         </button>
         <button
           onClick={() => setMode("quiz")}
-          className={`px-4 py-2 rounded-full text-sm font-medium border ${
-            mode === "quiz" ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300"
-          }`}
+          className={`px-4 py-2 rounded-full text-sm font-medium border ${mode === "quiz" ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300"}`}
         >
           👂 Quiz d'écoute
         </button>
       </div>
       {mode === "repeter" ? <EcouteRepete /> : <QuizEcoute />}
-      <p className="mt-8 text-xs text-gray-400 text-center">
-        ℹ️ Le son utilise la voix chinoise de ton appareil. Si tu n'entends rien, vérifie le volume ou essaie Chrome.
-      </p>
+      <p className="mt-8 text-xs text-gray-400 text-center">ℹ️ Le son utilise la voix chinoise de ton appareil.</p>
     </div>
   );
 }
-
-// ============================== PHONÉTIQUE ==============================
 
 function QuizTons({ onDone }) {
   const [qs, setQs] = useState([]);
@@ -1758,7 +1690,7 @@ function QuizTons({ onDone }) {
     return (
       <div className="text-center">
         <div className="text-3xl font-bold text-blue-600 mb-1">{score}/{qs.length} ({pct}%)</div>
-        <div className="text-sm text-gray-500 mb-3">{pct >= 80 ? "Très bonne oreille ! 🎵" : "Continue à t'entraîner ! 💪"}</div>
+        <div className="text-sm text-gray-500 mb-3">{pct >= 80 ? "Très bonne oreille ! 🎵" : "Continue ! 💪"}</div>
         <div className="flex gap-2 justify-center">
           <button onClick={start} className="px-5 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700">Refaire 🔁</button>
           {onDone && (
@@ -1777,7 +1709,7 @@ function QuizTons({ onDone }) {
   return (
     <div className="max-w-md mx-auto p-5 rounded-2xl border border-blue-200 bg-white shadow">
       <div className="text-center mb-4">
-        <p className="text-sm text-gray-500 mb-2">🎧 Écoute : quel est le ton de la syllabe ?</p>
+        <p className="text-sm text-gray-500 mb-2">🎧 Écoute : quel ton ?</p>
         <button onClick={() => speak(q.zh)} className="w-16 h-16 rounded-full bg-blue-600 text-white text-2xl shadow-lg hover:bg-blue-700">🔊</button>
       </div>
       <div className="grid grid-cols-2 gap-2">
@@ -1789,8 +1721,7 @@ function QuizTons({ onDone }) {
             else cls = "border-gray-200 bg-white opacity-50";
           }
           return (
-            <button
-              key={i}
+            <button key={i}
               onClick={() => {
                 if (answered) return;
                 setSelected(i + 1);
@@ -1805,17 +1736,9 @@ function QuizTons({ onDone }) {
       </div>
       {answered && (
         <div className="mt-4 text-center">
-          <div className="text-2xl font-bold text-gray-900">
-            {q.zh} <span className="text-red-600">{q.s}</span>
-          </div>
+          <div className="text-2xl font-bold text-gray-900">{q.zh} <span className="text-red-600">{q.s}</span></div>
           <div className="text-xs text-gray-500 mb-3">{q.m} · ton {q.t}</div>
-          <button
-            onClick={() => {
-              setCurrent((c) => c + 1);
-              setSelected(null);
-            }}
-            className="w-full py-2.5 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800 text-sm"
-          >
+          <button onClick={() => { setCurrent((c) => c + 1); setSelected(null); }} className="w-full py-2.5 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800 text-sm">
             Suivant →
           </button>
         </div>
@@ -1844,7 +1767,6 @@ function Phonetique() {
           </div>
         ))}
       </div>
-
       <h3 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
         <span className="w-1.5 h-5 bg-blue-600 rounded-full inline-block" />
         Quiz des tons 👂
@@ -1852,10 +1774,9 @@ function Phonetique() {
       <div className="p-5 rounded-2xl border border-blue-200 bg-blue-50 mb-8">
         <QuizTons />
       </div>
-
       <h3 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
         <span className="w-1.5 h-5 bg-blue-600 rounded-full inline-block" />
-        Guide de prononciation — initiales 🔤
+        Initiales 🔤
       </h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 mb-8">
         {GUIDE_INITIALES.map(([pinyin, init, hint], i) => (
@@ -1869,10 +1790,9 @@ function Phonetique() {
           </div>
         ))}
       </div>
-
       <h3 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
         <span className="w-1.5 h-5 bg-blue-600 rounded-full inline-block" />
-        Guide de prononciation — finales 🎼
+        Finales 🎼
       </h3>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 mb-8">
         {GUIDE_FINALES.map(([word, fin, hint], i) => (
@@ -1886,107 +1806,59 @@ function Phonetique() {
           </div>
         ))}
       </div>
-
       <div className="mt-8 mb-4 max-w-lg mx-auto">
         <VoiceDiagnostic />
       </div>
-
-      <p className="text-xs text-gray-400 text-center">
-        💡 Rappels : 3e ton + 3e ton → 2e ton + 3e ton (nǐ hǎo → ní hǎo) · 不 bù devient bú devant un 4e ton · le ton neutre est court et non marqué.
-      </p>
     </div>
   );
 }
 
-// ============================== ÉCRIT ==============================
-
 function TracePad({ ch }) {
   const canvasRef = useRef(null);
   const drawing = useRef(false);
-
   const paintBg = () => {
     const cv = canvasRef.current;
     if (!cv) return;
     const ctx = cv.getContext("2d");
-    const w = cv.width;
-    const h = cv.height;
+    const w = cv.width, h = cv.height;
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, w, h);
-    ctx.strokeStyle = "#e5e7eb";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([5, 5]);
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = "#e5e7eb"; ctx.lineWidth = 1; ctx.setLineDash([5, 5]);
     ctx.beginPath();
-    ctx.moveTo(w / 2, 0);
-    ctx.lineTo(w / 2, h);
-    ctx.moveTo(0, h / 2);
-    ctx.lineTo(w, h / 2);
-    ctx.moveTo(0, 0);
-    ctx.lineTo(w, h);
-    ctx.moveTo(w, 0);
-    ctx.lineTo(0, h);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.strokeStyle = "#cbd5e1";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(1, 1, w - 2, h - 2);
-    ctx.fillStyle = "rgba(239,68,68,0.16)";
-    ctx.font = "190px serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
+    ctx.moveTo(w / 2, 0); ctx.lineTo(w / 2, h);
+    ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2);
+    ctx.moveTo(0, 0); ctx.lineTo(w, h);
+    ctx.moveTo(w, 0); ctx.lineTo(0, h);
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 2; ctx.strokeRect(1, 1, w - 2, h - 2);
+    ctx.fillStyle = "rgba(239,68,68,0.16)"; ctx.font = "190px serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(ch, w / 2, h / 2 + 10);
-    ctx.strokeStyle = "#111827";
-    ctx.lineWidth = 4;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#111827"; ctx.lineWidth = 4; ctx.lineCap = "round"; ctx.lineJoin = "round";
   };
-
-  useEffect(() => {
-    paintBg();
-  }, [ch]);
-
+  useEffect(() => { paintBg(); }, [ch]);
   const pos = (e) => {
-    const cv = canvasRef.current;
-    const r = cv.getBoundingClientRect();
+    const cv = canvasRef.current; const r = cv.getBoundingClientRect();
     return [(e.clientX - r.left) * (cv.width / r.width), (e.clientY - r.top) * (cv.height / r.height)];
   };
-
   const down = (e) => {
     drawing.current = true;
     const ctx = canvasRef.current.getContext("2d");
-    const [x, y] = pos(e);
-    ctx.beginPath();
-    ctx.moveTo(x, y);
+    const [x, y] = pos(e); ctx.beginPath(); ctx.moveTo(x, y);
   };
-
   const move = (e) => {
     if (!drawing.current) return;
     const ctx = canvasRef.current.getContext("2d");
-    const [x, y] = pos(e);
-    ctx.lineTo(x, y);
-    ctx.stroke();
+    const [x, y] = pos(e); ctx.lineTo(x, y); ctx.stroke();
   };
-
-  const up = () => {
-    drawing.current = false;
-  };
-
+  const up = () => { drawing.current = false; };
   return (
     <div className="text-center">
-      <canvas
-        ref={canvasRef}
-        width={300}
-        height={300}
-        onPointerDown={down}
-        onPointerMove={move}
-        onPointerUp={up}
-        onPointerLeave={up}
+      <canvas ref={canvasRef} width={300} height={300}
+        onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={up}
         className="rounded-xl border-2 border-gray-300 bg-white shadow-inner touch-none mx-auto"
         style={{ width: "100%", maxWidth: 300 }}
       />
-      <button onClick={paintBg} className="mt-3 px-4 py-2 rounded-xl bg-gray-100 text-gray-700 text-sm font-bold hover:bg-gray-200">
-        🧽 Effacer
-      </button>
+      <button onClick={paintBg} className="mt-3 px-4 py-2 rounded-xl bg-gray-100 text-gray-700 text-sm font-bold hover:bg-gray-200">🧽 Effacer</button>
     </div>
   );
 }
@@ -2003,24 +1875,18 @@ function Ecrit({ onDone }) {
         </h3>
         <div className="grid grid-cols-6 gap-2 mb-5">
           {CHARS.map((c, i) => (
-            <button
-              key={i}
-              onClick={() => setChIdx(i)}
-              className={`aspect-square rounded-lg border text-2xl font-semibold transition-all ${
-                i === chIdx ? "bg-green-600 text-white border-green-600 shadow scale-105" : "bg-white text-gray-800 border-gray-300 hover:border-green-500"
-              }`}
-            >
+            <button key={i} onClick={() => setChIdx(i)} className={`aspect-square rounded-lg border text-2xl font-semibold transition-all ${i === chIdx ? "bg-green-600 text-white border-green-600 shadow scale-105" : "bg-white text-gray-800 border-gray-300 hover:border-green-500"}`}>
               {c.c}
             </button>
           ))}
         </div>
         <div className="p-4 rounded-xl border border-green-200 bg-green-50 text-sm text-gray-700 space-y-1.5">
-          <div className="font-bold text-green-900 mb-1">📏 Règles d'ordre des traits (du cours)</div>
-          <div>• 先横后竖 : le héng (—) avant le shù (｜) → 十</div>
-          <div>• 先撇后捺 : le piě avant le nà → 人, 八</div>
-          <div>• 从上到下 : de haut en bas → 三</div>
-          <div>• 先左后右 : de gauche à droite → 你, 好</div>
-          <div>• 先外后内再封口 : l'extérieur, l'intérieur, puis on ferme → 口</div>
+          <div className="font-bold text-green-900 mb-1">📏 Règles d'ordre des traits</div>
+          <div>• 先横后竖 : 十</div>
+          <div>• 先撇后捺 : 人, 八</div>
+          <div>• 从上到下 : 三</div>
+          <div>• 先左后右 : 你, 好</div>
+          <div>• 先外后内再封口 : 口</div>
         </div>
       </div>
       <div>
@@ -2031,29 +1897,16 @@ function Ecrit({ onDone }) {
             <div className="text-sm text-gray-500">{ch.m} · {ch.n} trait{ch.n > 1 ? "s" : ""}</div>
           </div>
           <div className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg p-3 mb-4">
-            ✏️ <b>Ordre conseillé :</b> {ch.tip}
+            ✏️ <b>Ordre :</b> {ch.tip}
           </div>
           <TracePad ch={ch.c} />
           <div className="flex gap-2 mt-3">
-            <button
-              onClick={() => setChIdx((i) => (i - 1 + CHARS.length) % CHARS.length)}
-              className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-700 font-bold hover:bg-gray-200 text-sm"
-            >
-              ← Précédent
-            </button>
-            <button
-              onClick={() => setChIdx((i) => (i + 1) % CHARS.length)}
-              className="flex-1 py-2.5 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 text-sm"
-            >
-              Suivant →
-            </button>
+            <button onClick={() => setChIdx((i) => (i - 1 + CHARS.length) % CHARS.length)} className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-700 font-bold hover:bg-gray-200 text-sm">← Précédent</button>
+            <button onClick={() => setChIdx((i) => (i + 1) % CHARS.length)} className="flex-1 py-2.5 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 text-sm">Suivant →</button>
           </div>
           {onDone && (
-            <button
-              onClick={() => onDone(100)}
-              className="mt-3 w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow text-sm"
-            >
-              ✅ Séance d'écriture terminée — valider (+8 XP)
+            <button onClick={() => onDone(100)} className="mt-3 w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow text-sm">
+              ✅ Valider (+8 XP)
             </button>
           )}
         </div>
@@ -2061,8 +1914,6 @@ function Ecrit({ onDone }) {
     </div>
   );
 }
-
-// ============================== DÉFI FINAL (BOSS) ==============================
 
 function BossChallenge({ lesson, onDone }) {
   const [runId, setRunId] = useState(0);
@@ -2077,10 +1928,7 @@ function BossChallenge({ lesson, onDone }) {
     if (finished) return;
     const t = setInterval(() => {
       setTimeLeft((s) => {
-        if (s <= 1) {
-          setFinished(true);
-          return 0;
-        }
+        if (s <= 1) { setFinished(true); return 0; }
         return s - 1;
       });
     }, 1000);
@@ -2096,10 +1944,7 @@ function BossChallenge({ lesson, onDone }) {
 
   const next = () => {
     if (current + 1 >= questions.length) setFinished(true);
-    else {
-      setCurrent((c) => c + 1);
-      setSelected(null);
-    }
+    else { setCurrent((c) => c + 1); setSelected(null); }
   };
 
   if (finished) {
@@ -2109,32 +1954,16 @@ function BossChallenge({ lesson, onDone }) {
       <div className="max-w-lg mx-auto p-6 rounded-2xl border border-gray-200 bg-white shadow text-center">
         <div className="text-6xl mb-2">{passed ? "🏆" : "💪"}</div>
         <div className="text-4xl font-bold text-gray-900 mb-1">{score}/{questions.length}</div>
-        <div className="text-sm text-gray-500 mb-4">Score : {pct}% · Seuil de réussite : 70%</div>
+        <div className="text-sm text-gray-500 mb-4">Score : {pct}% · Seuil : 70%</div>
         {passed ? (
           <>
-            <div className="text-green-700 font-bold mb-4">🎉 恭喜！Bravo, tu maîtrises la leçon {lesson} !</div>
-            {onDone && (
-              <button onClick={() => onDone(pct)} className="w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow">
-                ✅ Valider le défi (+15 XP) et continuer le parcours
-              </button>
-            )}
+            <div className="text-green-700 font-bold mb-4">🎉 恭喜！Bravo !</div>
+            {onDone && <button onClick={() => onDone(pct)} className="w-full py-3 rounded-xl bg-green-600 text-white font-bold hover:bg-green-700 shadow">✅ Valider (+15 XP)</button>}
           </>
         ) : (
           <>
-            <div className="text-gray-600 mb-4 text-sm">Pas encore ! Révise les fiches de la leçon {lesson} et reviens — tu vas y arriver. 加油！</div>
-            <button
-              onClick={() => {
-                setRunId((r) => r + 1);
-                setCurrent(0);
-                setSelected(null);
-                setScore(0);
-                setTimeLeft(120);
-                setFinished(false);
-              }}
-              className="w-full py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700"
-            >
-              🔁 Recommencer le défi
-            </button>
+            <div className="text-gray-600 mb-4 text-sm">Révise et reviens ! 加油！</div>
+            <button onClick={() => { setRunId((r) => r + 1); setCurrent(0); setSelected(null); setScore(0); setTimeLeft(120); setFinished(false); }} className="w-full py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700">🔁 Recommencer</button>
           </>
         )}
       </div>
@@ -2166,12 +1995,7 @@ function BossChallenge({ lesson, onDone }) {
               else cls = "border-gray-200 bg-white opacity-50";
             }
             return (
-              <button
-                key={i}
-                onClick={() => answer(i)}
-                disabled={answered}
-                className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}
-              >
+              <button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all ${cls}`}>
                 {opt}
               </button>
             );
@@ -2180,7 +2004,7 @@ function BossChallenge({ lesson, onDone }) {
         {answered && (
           <div className="mt-4">
             <div className={`text-sm font-bold mb-2 ${selected === q.answer ? "text-green-700" : "text-red-700"}`}>
-              {selected === q.answer ? "✓ 对！" : `✗ La réponse : ${q.options[q.answer]}`}
+              {selected === q.answer ? "✓ 对！" : `✗ Réponse : ${q.options[q.answer]}`}
             </div>
             <button onClick={next} className="w-full py-3 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800">
               {current + 1 >= questions.length ? "Résultat →" : "Suivant →"}
@@ -2191,8 +2015,6 @@ function BossChallenge({ lesson, onDone }) {
     </div>
   );
 }
-
-// ============================== DÉFI ÉCLAIR ==============================
 
 function DefiEclair({ unlockedLessons, addXp }) {
   const pool = useMemo(() => ALL_QUIZ.filter((q) => unlockedLessons.includes(q.lesson)), [unlockedLessons]);
@@ -2225,11 +2047,7 @@ function DefiEclair({ unlockedLessons, addXp }) {
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
       setTimeLeft((s) => {
-        if (s <= 1) {
-          clearInterval(timerRef.current);
-          setStatus("done");
-          return 0;
-        }
+        if (s <= 1) { clearInterval(timerRef.current); setStatus("done"); return 0; }
         return s - 1;
       });
     }, 1000);
@@ -2247,13 +2065,9 @@ function DefiEclair({ unlockedLessons, addXp }) {
       <div className="max-w-lg mx-auto p-6 rounded-2xl border-2 border-purple-300 bg-purple-50 shadow text-center">
         <div className="text-5xl mb-2">⚡</div>
         <h3 className="text-xl font-bold text-purple-900 mb-2">Défi éclair — 60 secondes !</h3>
-        <p className="text-sm text-gray-600 mb-1">
-          Questions en rafale sur les leçons débloquées : {unlockedLessons.join(", ")}.
-        </p>
-        <p className="text-sm text-gray-500 mb-4">+2 XP par bonne réponse · Pas de pénalité — fonce !</p>
-        <button onClick={start} className="w-full py-3 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 shadow">
-          Démarrer le chrono ⏱️
-        </button>
+        <p className="text-sm text-gray-600 mb-1">Questions sur les leçons débloquées : {unlockedLessons.join(", ")}.</p>
+        <p className="text-sm text-gray-500 mb-4">+2 XP par bonne réponse</p>
+        <button onClick={start} className="w-full py-3 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700 shadow">Démarrer ⏱️</button>
       </div>
     );
   }
@@ -2263,10 +2077,8 @@ function DefiEclair({ unlockedLessons, addXp }) {
       <div className="max-w-lg mx-auto p-6 rounded-2xl border border-gray-200 bg-white shadow text-center">
         <div className="text-5xl mb-2">{score >= 15 ? "🚀" : score >= 8 ? "👏" : "💪"}</div>
         <div className="text-4xl font-bold text-purple-700 mb-1">{score} bonnes réponses</div>
-        <div className="text-sm text-gray-500 mb-4">Gains : +{score * 2} XP ⚡</div>
-        <button onClick={start} className="w-full py-3 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700">
-          Rejouer 🔁
-        </button>
+        <div className="text-sm text-gray-500 mb-4">+{score * 2} XP ⚡</div>
+        <button onClick={start} className="w-full py-3 rounded-xl bg-purple-600 text-white font-bold hover:bg-purple-700">Rejouer 🔁</button>
       </div>
     );
   }
@@ -2280,9 +2092,7 @@ function DefiEclair({ unlockedLessons, addXp }) {
     if (i === q.answer) setScore((s) => s + 1);
     else noteMiss(q.question);
     flashRef.current = setTimeout(() => {
-      if (current + 1 >= questions.length) {
-        setQuestions((old) => [...old, ...shuffle(pool).slice(0, 5)]);
-      }
+      if (current + 1 >= questions.length) setQuestions((old) => [...old, ...shuffle(pool).slice(0, 5)]);
       setCurrent((c) => c + 1);
       setSelected(null);
     }, 650);
@@ -2311,12 +2121,7 @@ function DefiEclair({ unlockedLessons, addXp }) {
               else cls = "border-gray-200 bg-white opacity-50";
             }
             return (
-              <button
-                key={i}
-                onClick={() => answer(i)}
-                disabled={answered}
-                className={`w-full text-left px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${cls}`}
-              >
+              <button key={i} onClick={() => answer(i)} disabled={answered} className={`w-full text-left px-4 py-2.5 rounded-xl border text-sm font-medium transition-all ${cls}`}>
                 {opt}
               </button>
             );
@@ -2327,29 +2132,16 @@ function DefiEclair({ unlockedLessons, addXp }) {
   );
 }
 
-// ============================== PARCOURS ==============================
-
 function NodeButton({ node, st, unlocked, isNext, onClick }) {
   const stars = starsFor(st);
   let circleCls = "bg-white text-gray-700 border-gray-300";
   let icon = node.icon;
-  if (st && st.done) {
-    circleCls = "bg-green-500 text-white border-green-600";
-  } else if (!unlocked) {
-    circleCls = "bg-gray-200 text-gray-400 border-gray-300";
-    icon = "🔒";
-  } else if (isNext) {
-    circleCls = "bg-red-600 text-white border-red-700 ring-4 ring-red-200 animate-pulse";
-  } else {
-    circleCls = "bg-red-50 text-red-600 border-red-300";
-  }
+  if (st && st.done) { circleCls = "bg-green-500 text-white border-green-600"; }
+  else if (!unlocked) { circleCls = "bg-gray-200 text-gray-400 border-gray-300"; icon = "🔒"; }
+  else if (isNext) { circleCls = "bg-red-600 text-white border-red-700 ring-4 ring-red-200 animate-pulse"; }
+  else { circleCls = "bg-red-50 text-red-600 border-red-300"; }
   return (
-    <button
-      onClick={unlocked ? onClick : undefined}
-      disabled={!unlocked}
-      className="flex flex-col items-center gap-1 shrink-0 group"
-      title={unlocked ? node.label + " (+" + node.xp + " XP)" : "Termine l'étape précédente pour débloquer"}
-    >
+    <button onClick={unlocked ? onClick : undefined} disabled={!unlocked} className="flex flex-col items-center gap-1 shrink-0 group" title={unlocked ? node.label + " (+" + node.xp + " XP)" : "Termine l'étape précédente"}>
       <div className={`w-14 h-14 rounded-full border-2 flex items-center justify-center text-2xl shadow-sm transition-all ${circleCls} ${unlocked ? "hover:scale-110 cursor-pointer" : "cursor-not-allowed"}`}>
         {st && st.done ? "✅" : icon}
       </div>
@@ -2387,17 +2179,12 @@ function Parcours({ progress, onLaunch }) {
             <div className="text-xs opacity-80">🎯 Prochaine étape</div>
             <div className="font-bold">Leçon {nextNode.lesson} · {nextNode.label} (+{nextNode.xp} XP)</div>
           </div>
-          <button
-            onClick={() => onLaunch(nextNode)}
-            className="px-4 py-2 rounded-xl bg-white text-red-600 font-bold text-sm hover:bg-red-50"
-          >
-            Commencer →
-          </button>
+          <button onClick={() => onLaunch(nextNode)} className="px-4 py-2 rounded-xl bg-white text-red-600 font-bold text-sm hover:bg-red-50">Commencer →</button>
         </div>
       )}
       {!nextNode && (
         <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-amber-400 to-yellow-500 text-white shadow text-center">
-          <div className="text-xl font-bold">👑 Parcours terminé ! Tu es un champion HSK 1 !</div>
+          <div className="text-xl font-bold">👑 Parcours terminé !</div>
         </div>
       )}
       {ALL_LESSONS.map((l) => {
@@ -2422,33 +2209,20 @@ function Parcours({ progress, onLaunch }) {
             <div className="flex items-center gap-1 overflow-x-auto pb-2 pt-1">
               {idxs.map(({ n, i }, j) => (
                 <React.Fragment key={n.id}>
-                  {j > 0 && (
-                    <div
-                      className={`h-1 w-6 md:w-10 rounded-full shrink-0 ${isDone(NODES[i - 1].id) ? "bg-green-400" : "bg-gray-300"}`}
-                    />
-                  )}
-                  <NodeButton
-                    node={n}
-                    st={nodeStateById(n.id)}
-                    unlocked={i === 0 || isDone(NODES[i - 1].id)}
-                    isNext={nextIdx === i}
-                    onClick={() => onLaunch(n)}
-                  />
+                  {j > 0 && <div className={`h-1 w-6 md:w-10 rounded-full shrink-0 ${isDone(NODES[i - 1].id) ? "bg-green-400" : "bg-gray-300"}`} />}
+                  <NodeButton node={n} st={nodeStateById(n.id)} unlocked={i === 0 || isDone(NODES[i - 1].id)} isNext={nextIdx === i} onClick={() => onLaunch(n)} />
                 </React.Fragment>
               ))}
             </div>
           </div>
         );
       })}
-      <p className="text-xs text-gray-400 text-center">
-        💡 Suis le chemin dans l'ordre — chaque étape validée te donne des XP et débloque la suivante. Rejoue une étape pour l'améliorer (XP réduit).
-        <br />⏱️ Journée chargée ? Lance une <b>session Express</b> (5 min) dans l'onglet dédié — ta série 🔥 n'en souffrira pas !
-      </p>
+      <p className="text-xs text-gray-400 text-center">💡 Suis le chemin dans l'ordre — chaque étape validée débloque la suivante.</p>
     </div>
   );
 }
 
-// ============================== EXPRESS · JEUX · PROF IA · FONDATION ==============================
+// ============================== CONSTANTES FINALES ==============================
 
 const PHRASES_DU_JOUR = [
   { zh: "我喝咖啡。", py: "Wǒ hē kāfēi.", fr: "Je bois du café." },
@@ -2481,61 +2255,17 @@ const AVATARS = [
 ];
 
 const PROF_TOPICS = [
-  {
-    keys: ["的", "de ", "possess"],
-    title: "La particule 的 (de)",
-    body: "的 marque la possession, comme « de » ou « 's » en français : 我的书 wǒ de shū = mon livre (littéralement « je de livre »). La structure : possesseur + 的 + objet. Ma méthode : les petites phrases — 我的爸爸、你的老师、她的咖啡. À l'oral, quand tout le monde sait de qui on parle, on entend souvent wǒ bàba sans 的.",
-  },
-  {
-    keys: ["两", "二", "liang", "er ", " 2"],
-    title: "两 ou 二 ?",
-    body: "Deux chiffres : 二 èr et 两 liǎng. Règle simple : 两 se met devant un classificateur (de choses) — 两个哥哥 liǎng gè gēge (deux grands frères). 二 sert à compter, faire des numéros de téléphone, et dans l'argent (二块 èr kuài... non, pour l'argent on dit 两块 aussi pour 2 francs !). Retiens : 两 + classificateur, sinon 二.",
-  },
-  {
-    keys: ["3e ton", "troisième ton", "sandhi", "ton 3", "ǎ"],
-    title: "Le mystère du 3e ton",
-    body: "Deux 3es tons qui se suivent → le premier devient 2e ton à l'oral : 你好 nǐ hǎo se prononce ní hǎo. C'est pour ça que les Chinois paraissent « chanter ». Et un 3e ton isolé en fin de phrase garde sa forme V descendante-montante : 好 hǎo.",
-  },
-  {
-    keys: ["不", "bu ", "bú"],
-    title: "Le cas de 不 bù",
-    body: "不 est normalement au 4e ton (bù), mais devant un autre 4e ton il passe au 2e ton : 不是 bú shì, 不客气 bú kèqi, 不谢 bú xiè. Petite astuce mémoire : « bù + 4e ton = bú ».",
-  },
-  {
-    keys: ["j q", "q x", "ju", "qu", "xu", "ü", "u "],
-    title: "j, q, x + le ü déguisé",
-    body: "Après j, q, x, la voyelle ü s'écrit u (mais se prononce ü !) : 去 qù, 居 jū. Pourquoi ? Pour simplifier l'écriture. Compare : 五 wǔ (vrai ou) ≠ 玉 yù (ü). Le son j/q/x se prononce avec la langue plate et avancée, comme « tsi », « tsi aspiré », « si » très fins.",
-  },
-  {
-    keys: ["儿", "er ", "rétroflex"],
-    title: "Le 儿 (er) rétroflexe",
-    body: "哪儿 nǎr (où) : la finale 儿 fait recourber la langue vers le haut, comme un petit « r » américain. À l'écrit, 哪儿 et 哪里 se prononcent différemment mais veulent dire pareil. Ne t'inquiète pas si tu n'y arrives pas tout de suite : c'est le son le plus dur pour les débutants.",
-  },
-  {
-    keys: ["classificateur", "口", "个", "本", "measure"],
-    title: "Les classificateurs 口 · 个 · 本",
-    body: "En chinois on ne dit pas « deux frères » mais « deux + classificateur + frères ». 个 gè = général (personnes, choses). 口 kǒu = membres d'une famille (家有三口人). 本 běn = objets plats (livres). 我的老师 dit toujours : 个 quand tu hésites !",
-  },
-  {
-    keys: ["几", "ji ", "combien"],
-    title: "几 (jǐ) — combien ?",
-    body: "几 jǐ = « combien » pour les petits nombres (moins de 10) : 你家有几口人？ Nǐ jiā yǒu jǐ kǒu rén? Au-delà de 10, on utilise 多少 duōshao. 儿化的写法 : 几 est au 3e ton.",
-  },
-  {
-    keys: ["有", "没", "yǒu", "avoir"],
-    title: "有 yǒu et 没有 méiyǒu",
-    body: "有 yǒu = avoir, exister ; sa négation est spéciale : 没有 (pas 不有 !) : 我没有哥哥 wǒ méiyǒu gēge = je n'ai pas de grand frère. Attention au ton : 有 yǒu (3e ton).",
-  },
-  {
-    keys: ["哪国人", "nationalité", "pays"],
-    title: "Les nationalités",
-    body: "Formule magique : pays + 人 rén = habitant. 中国 Zhōngguó → 中国人 Zhōngguó rén. 法国 Fǎguó → 法国人. Et pour la Côte d'Ivoire : 科特迪瓦 Kētèdíwǎ → 科特迪瓦人 Kētèdíwǎ rén ! Question classique : 你是哪国人？ Nǐ shì nǎ guó rén?",
-  },
-  {
-    keys: ["你好", "bonjour", "salut", "salutation"],
-    title: "Bien saluer en chinois",
-    body: "你好 nǐ hǎo = bonjour (familier). 您好 nín hǎo = respect (professeur, aînés). 老师好 lǎoshī hǎo = bonjour professeur. 同学们好 tóngxuémen hǎo = bonjour chers camarades. Au revoir : 再见 zàijiàn. Merci : 谢谢 xièxie → 不客气 bú kèqi (je t'en prie).",
-  },
+  { keys: ["的", "de ", "possess"], title: "La particule 的 (de)", body: "的 marque la possession, comme « de » ou « 's » en français : 我的书 wǒ de shū = mon livre. La structure : possesseur + 的 + objet." },
+  { keys: ["两", "二", "liang", "er ", " 2"], title: "两 ou 二 ?", body: "Deux chiffres : 二 èr et 两 liǎng. 两 se met devant un classificateur — 两个哥哥. 二 sert à compter : 2, 12, 22…" },
+  { keys: ["3e ton", "troisième ton", "sandhi", "ton 3", "ǎ"], title: "Le mystère du 3e ton", body: "Deux 3es tons qui se suivent → le premier devient 2e ton à l'oral : 你好 nǐ hǎo se prononce ní hǎo." },
+  { keys: ["不", "bu ", "bú"], title: "Le cas de 不 bù", body: "不 est au 4e ton (bù), mais devant un autre 4e ton il passe au 2e ton : 不是 bú shì, 不客气 bú kèqi." },
+  { keys: ["j q", "q x", "ju", "qu", "xu", "ü", "u "], title: "j, q, x + le ü déguisé", body: "Après j, q, x, la voyelle ü s'écrit u (mais se prononce ü !) : 去 qù, 居 jū." },
+  { keys: ["儿", "er ", "rétroflex"], title: "Le 儿 (er) rétroflexe", body: "哪儿 nǎr (où) : la finale 儿 fait recourber la langue vers le haut, comme un petit « r » américain." },
+  { keys: ["classificateur", "口", "个", "本", "measure"], title: "Les classificateurs 口 · 个 · 本", body: "个 gè = général (personnes, choses). 口 kǒu = famille (家有三口人). 本 běn = objets plats (livres)." },
+  { keys: ["几", "ji ", "combien"], title: "几 (jǐ) — combien ?", body: "几 jǐ = « combien » pour les petits nombres (moins de 10) : 你家有几口人？" },
+  { keys: ["有", "没", "yǒu", "avoir"], title: "有 yǒu et 没有 méiyǒu", body: "有 yǒu = avoir ; sa négation est 没有 (pas 不有 !) : 我没有哥哥 wǒ méiyǒu gēge." },
+  { keys: ["哪国人", "nationalité", "pays"], title: "Les nationalités", body: "Formule magique : pays + 人 rén = habitant. 中国 → 中国人. 科特迪瓦 → 科特迪瓦人 !" },
+  { keys: ["你好", "bonjour", "salut", "salutation"], title: "Bien saluer en chinois", body: "你好 nǐ hǎo = bonjour. 您好 nín hǎo = respect. 老师好 lǎoshī hǎo = bonjour professeur." },
 ];
 
 function offlineProfAnswer(q) {
@@ -2545,21 +2275,18 @@ function offlineProfAnswer(q) {
   for (const t of PROF_TOPICS) {
     let hits = 0;
     for (const k of t.keys) if (s.includes(k.toLowerCase())) hits++;
-    if (hits > bestHits) {
-      best = t;
-      bestHits = hits;
-    }
+    if (hits > bestHits) { best = t; bestHits = hits; }
   }
   if (best) {
-    return "📘 **" + best.title + "**\n\n" + best.body + "\n\n_As-tu une autre question ? Essaie : 的 · 两/二 · les tons · j q x · classificateurs… ou connecte ta clé API Gemini (bouton ⚙️) pour un professeur IA complet !";
+    return "📘 **" + best.title + "**\n\n" + best.body + "\n\n_As-tu une autre question ? Essaie : 的 · 两/二 · les tons · j q x · classificateurs…_";
   }
-  return "🧑‍🏫 Je suis le professeur hors-ligne : je connais par cœur tes leçons HSK 1 (的, 两/二, les 4 tons, j/q/x + ü, 儿, classificateurs 口/个/本, 几, 有/没有, nationalités, salutations). Pose-moi une question sur un de ces sujets !\n\n💡 Pour des réponses illimitées sur n'importe quel sujet, ajoute ta clé API Gemini (bouton ⚙️) ou soutiens la fondation ❤️.";
+  return "🧑‍🏫 Je suis le professeur hors-ligne : je connais par cœur tes leçons HSK 1 (的, 两/二, les tons, j/q/x + ü, 儿, classificateurs 口/个/本, 几, 有/没有, nationalités, salutations).\n\n💡 Pour des réponses illimitées, ajoute ta clé API Gemini (bouton ⚙️).";
 }
 
 const PROF_SYSTEM_PROMPT =
-  "Tu es 李老师 (Professeur Li), un professeur de chinois chaleureux et patient pour un débutant HSK 1 (niveau A1) vivant en Côte d'Ivoire, qui apprend le chinois sur l'application YǔLù 语路 et qui a un emploi du temps très chargé. Règles : réponds toujours en français ; utilise le chinois avec le pinyin pour chaque exemple ; reste concis (max 150 mots), structuré et concret ; donne des exemples du quotidien ivoirien quand c'est possible (café, famille, transports, greetings) ; encourage l'élève (加油 !) ; corrige ses erreurs de pinyin ou de grammaire avec bienveillance ; ne dépasse jamais le niveau HSK 1 sauf si l'élève demande explicitement plus.";
+  "Tu es 李老师 (Professeur Li), un professeur de chinois chaleureux et patient pour un débutant HSK 1 (niveau A1) vivant en Côte d'Ivoire, qui apprend le chinois sur l'application YǔLù 语路 et qui a un emploi du temps très chargé. Règles : réponds toujours en français ; utilise le chinois avec le pinyin pour chaque exemple ; reste concis (max 150 mots) ; encourage l'élève (加油 !) ; corrige ses erreurs avec bienveillance ; ne dépasse jamais le niveau HSK 1 sauf si l'élève demande explicitement plus.";
 
-// ------------------------------ SESSION EXPRESS ------------------------------
+// ============================== SESSION EXPRESS ==============================
 
 function Express({ addXp, addCoins, unlockedLessons }) {
   const [phase, setPhase] = useState("intro");
@@ -2569,14 +2296,8 @@ function Express({ addXp, addCoins, unlockedLessons }) {
   const [score, setScore] = useState(0);
   const [seconds, setSeconds] = useState(0);
 
-  const cards = useMemo(
-    () => shuffle(ALL_VOCAB.filter((v) => unlockedLessons.includes(v.lesson))).slice(0, 4),
-    [unlockedLessons]
-  );
-  const questions = useMemo(
-    () => shuffle(ALL_QUIZ.filter((q) => unlockedLessons.includes(q.lesson))).slice(0, 3),
-    [unlockedLessons]
-  );
+  const cards = useMemo(() => shuffle(ALL_VOCAB.filter((v) => unlockedLessons.includes(v.lesson))).slice(0, 4), [unlockedLessons]);
+  const questions = useMemo(() => shuffle(ALL_QUIZ.filter((q) => unlockedLessons.includes(q.lesson))).slice(0, 3), [unlockedLessons]);
   const phrase = useMemo(() => PHRASES_DU_JOUR[Math.floor(Math.random() * PHRASES_DU_JOUR.length)], []);
 
   useEffect(() => {
@@ -2585,29 +2306,10 @@ function Express({ addXp, addCoins, unlockedLessons }) {
     return () => clearInterval(t);
   }, [phase]);
 
-  const start = () => {
-    setSeconds(0);
-    setPhase("cards");
-  };
-
-  const answerQuiz = (i) => {
-    if (sel != null) return;
-    setSel(i);
-    if (i === questions[qi].answer) setScore((s) => s + 1);
-  };
-
-  const nextQuiz = () => {
-    setSel(null);
-    if (qi + 1 < questions.length) setQi(qi + 1);
-    else setPhase("phrase");
-  };
-
-  const finish = () => {
-    setPhase("done");
-    addXp(8);
-    addCoins(3);
-  };
-
+  const start = () => { setSeconds(0); setPhase("cards"); };
+  const answerQuiz = (i) => { if (sel != null) return; setSel(i); if (i === questions[qi].answer) setScore((s) => s + 1); };
+  const nextQuiz = () => { setSel(null); if (qi + 1 < questions.length) setQi(qi + 1); else setPhase("phrase"); };
+  const finish = () => { setPhase("done"); addXp(8); addCoins(3); };
   const fmt = (s) => Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 
   return (
@@ -2615,7 +2317,7 @@ function Express({ addXp, addCoins, unlockedLessons }) {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h3 className="text-lg font-bold text-gray-800">⏱️ Session express · 5 minutes</h3>
-          <p className="text-xs text-gray-500">Pensée pour les journées chargées : 4 mots, 3 questions, 1 phrase — et c'est gagné !</p>
+          <p className="text-xs text-gray-500">4 mots, 3 questions, 1 phrase — et c'est gagné !</p>
         </div>
         <div className="px-3 py-1.5 rounded-xl bg-white border border-teal-300 font-mono font-bold text-teal-700">⏳ {fmt(seconds)}</div>
       </div>
@@ -2623,35 +2325,21 @@ function Express({ addXp, addCoins, unlockedLessons }) {
       {phase === "intro" && (
         <div className="text-center py-6">
           <div className="text-5xl mb-3">⚡</div>
-          <p className="text-sm text-gray-600 mb-5 max-w-md mx-auto">
-            Pas le temps d'assister au cours ? Cette mini-session réveille ta mémoire : révision éclair du vocabulaire, 3 questions rapides et la phrase du jour. <b>8 XP + 3 🪙</b> à la clé.
-          </p>
-          <button onClick={start} className="px-6 py-3 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-700 shadow">
-            C'est parti ! →
-          </button>
+          <p className="text-sm text-gray-600 mb-5 max-w-md mx-auto">Mini-session express : révision éclair + 3 questions + phrase du jour. <b>8 XP + 3 🪙</b></p>
+          <button onClick={start} className="px-6 py-3 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-700 shadow">C'est parti ! →</button>
         </div>
       )}
 
       {phase === "cards" && cards[ci] && (
         <div className="text-center py-4">
-          <div className="text-xs text-teal-600 mb-2">Mot {ci + 1} / {cards.length} — te souviens-tu ?</div>
+          <div className="text-xs text-teal-600 mb-2">Mot {ci + 1} / {cards.length}</div>
           <div className="text-6xl font-bold text-gray-900 my-3">{cards[ci].hanzi}</div>
           <div className="text-lg text-teal-700 font-medium">{cards[ci].pinyin}</div>
           <div className="text-sm text-gray-500 italic mb-5">{cards[ci].fr}</div>
           <div className="flex justify-center gap-3">
             <EcouterBtn text={cards[ci].hanzi} />
-            <button
-              onClick={() => { if (ci + 1 < cards.length) setCi(ci + 1); else setPhase("quiz"); }}
-              className="px-5 py-1.5 rounded-full bg-teal-600 text-white text-xs font-bold hover:bg-teal-700"
-            >
-              Je le savais ✓ →
-            </button>
-            <button
-              onClick={() => { if (ci + 1 < cards.length) setCi(ci + 1); else setPhase("quiz"); }}
-              className="px-5 py-1.5 rounded-full bg-white border border-gray-300 text-gray-500 text-xs hover:bg-gray-100"
-            >
-              À revoir ⟲
-            </button>
+            <button onClick={() => { if (ci + 1 < cards.length) setCi(ci + 1); else setPhase("quiz"); }} className="px-5 py-1.5 rounded-full bg-teal-600 text-white text-xs font-bold hover:bg-teal-700">Je le savais ✓ →</button>
+            <button onClick={() => { if (ci + 1 < cards.length) setCi(ci + 1); else setPhase("quiz"); }} className="px-5 py-1.5 rounded-full bg-white border border-gray-300 text-gray-500 text-xs hover:bg-gray-100">À revoir ⟲</button>
           </div>
         </div>
       )}
@@ -2662,31 +2350,13 @@ function Express({ addXp, addCoins, unlockedLessons }) {
           <div className="font-semibold text-gray-900 mb-3">{questions[qi].question}</div>
           <div className="grid md:grid-cols-2 gap-2">
             {questions[qi].options.map((opt, i) => (
-              <button
-                key={i}
-                onClick={() => answerQuiz(i)}
-                className={`p-2.5 rounded-xl border text-sm text-left transition-colors ${
-                  sel == null
-                    ? "bg-white border-gray-300 hover:border-teal-500"
-                    : i === questions[qi].answer
-                    ? "bg-green-100 border-green-500"
-                    : i === sel
-                    ? "bg-red-100 border-red-400"
-                    : "bg-white border-gray-200 opacity-60"
-                }`}
-              >
-                {opt}
-              </button>
+              <button key={i} onClick={() => answerQuiz(i)} className={`p-2.5 rounded-xl border text-sm text-left transition-colors ${sel == null ? "bg-white border-gray-300 hover:border-teal-500" : i === questions[qi].answer ? "bg-green-100 border-green-500" : i === sel ? "bg-red-100 border-red-400" : "bg-white border-gray-200 opacity-60"}`}>{opt}</button>
             ))}
           </div>
           {sel != null && (
             <div className="mt-3 flex items-center justify-between">
-              <span className={`text-sm font-bold ${sel === questions[qi].answer ? "text-green-600" : "text-red-600"}`}>
-                {sel === questions[qi].answer ? "✓ Correct !" : "✗ La bonne réponse était en vert"}
-              </span>
-              <button onClick={nextQuiz} className="px-4 py-1.5 rounded-full bg-teal-600 text-white text-xs font-bold hover:bg-teal-700">
-                Suivant →
-              </button>
+              <span className={`text-sm font-bold ${sel === questions[qi].answer ? "text-green-600" : "text-red-600"}`}>{sel === questions[qi].answer ? "✓ Correct !" : "✗ La bonne réponse était en vert"}</span>
+              <button onClick={nextQuiz} className="px-4 py-1.5 rounded-full bg-teal-600 text-white text-xs font-bold hover:bg-teal-700">Suivant →</button>
             </div>
           )}
         </div>
@@ -2698,12 +2368,8 @@ function Express({ addXp, addCoins, unlockedLessons }) {
           <div className="text-4xl font-bold text-gray-900 my-3">{phrase.zh}</div>
           <div className="text-lg text-teal-700 font-medium">{phrase.py}</div>
           <div className="text-sm text-gray-500 italic mb-4">{phrase.fr}</div>
-          <div className="flex justify-center">
-            <EcouterBtn text={phrase.zh} />
-          </div>
-          <button onClick={finish} className="mt-5 px-6 py-2.5 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-700 shadow">
-            Terminer 🎉
-          </button>
+          <div className="flex justify-center"><EcouterBtn text={phrase.zh} /></div>
+          <button onClick={finish} className="mt-5 px-6 py-2.5 rounded-xl bg-teal-600 text-white font-bold hover:bg-teal-700 shadow">Terminer 🎉</button>
         </div>
       )}
 
@@ -2711,16 +2377,13 @@ function Express({ addXp, addCoins, unlockedLessons }) {
         <div className="text-center py-6">
           <div className="text-5xl mb-3">🏆</div>
           <div className="text-lg font-bold text-gray-900 mb-1">Session express terminée en {fmt(seconds)} !</div>
-          <div className="text-sm text-gray-600 mb-2">Score quiz : {score}/{questions.length} · Mots révisés : {cards.length}</div>
-          <div className="text-sm font-bold text-teal-700">+8 XP · +3 🪙 pièces Sagesse</div>
-          <p className="text-xs text-gray-400 mt-3">Même 5 minutes par jour maintiennent ta série 🔥 vivante — c'est ça, l'avantage des apprenants pressés !</p>
+          <div className="text-sm text-gray-600 mb-2">Score : {score}/{questions.length} · Mots révisés : {cards.length}</div>
+          <div className="text-sm font-bold text-teal-700">+8 XP · +3 🪙</div>
         </div>
       )}
     </div>
   );
 }
-
-// ------------------------------ JEUX ------------------------------
 
 function MemoryGame({ onWin }) {
   const [round, setRound] = useState(0);
@@ -2738,9 +2401,7 @@ function MemoryGame({ onWin }) {
   const [moves, setMoves] = useState(0);
   const won = deck.length > 0 && matched.length === deck.length;
 
-  useEffect(() => {
-    if (won) onWin(moves);
-  }, [won]);
+  useEffect(() => { if (won) onWin(moves); }, [won]);
 
   const click = (i) => {
     if (busy || flipped.includes(i) || matched.includes(deck[i].id)) return;
@@ -2751,16 +2412,9 @@ function MemoryGame({ onWin }) {
       setBusy(true);
       const [a, b] = nf;
       if (deck[a].match === deck[b].match && deck[a].kind !== deck[b].kind) {
-        setTimeout(() => {
-          setMatched((mm) => [...mm, deck[a].id, deck[b].id]);
-          setFlipped([]);
-          setBusy(false);
-        }, 450);
+        setTimeout(() => { setMatched((mm) => [...mm, deck[a].id, deck[b].id]); setFlipped([]); setBusy(false); }, 450);
       } else {
-        setTimeout(() => {
-          setFlipped([]);
-          setBusy(false);
-        }, 800);
+        setTimeout(() => { setFlipped([]); setBusy(false); }, 800);
       }
     }
   };
@@ -2770,13 +2424,8 @@ function MemoryGame({ onWin }) {
       {won ? (
         <div className="text-center py-5">
           <div className="text-4xl mb-2">🎉</div>
-          <div className="font-bold text-gray-800">Toutes les paires trouvées en {moves} coups !</div>
-          <button
-            onClick={() => { setFlipped([]); setMatched([]); setMoves(0); setRound((r) => r + 1); }}
-            className="mt-3 px-4 py-2 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600"
-          >
-            Nouveau plateau 🔄
-          </button>
+          <div className="font-bold text-gray-800">Toutes les paires en {moves} coups !</div>
+          <button onClick={() => { setFlipped([]); setMatched([]); setMoves(0); setRound((r) => r + 1); }} className="mt-3 px-4 py-2 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600">Nouveau plateau 🔄</button>
         </div>
       ) : (
         <>
@@ -2785,22 +2434,10 @@ function MemoryGame({ onWin }) {
             {deck.map((c, i) => {
               const show = flipped.includes(i) || matched.includes(c.id);
               return (
-                <button
-                  key={c.id + i}
-                  onClick={() => click(i)}
-                  className={`h-20 rounded-xl border-2 flex flex-col items-center justify-center transition-all ${
-                    show
-                      ? c.kind === "h"
-                        ? "bg-white border-amber-400"
-                        : "bg-amber-50 border-amber-300"
-                      : "bg-gray-800 border-gray-700 hover:border-amber-400"
-                  }`}
-                >
+                <button key={c.id + i} onClick={() => click(i)} className={`h-20 rounded-xl border-2 flex flex-col items-center justify-center transition-all ${show ? c.kind === "h" ? "bg-white border-amber-400" : "bg-amber-50 border-amber-300" : "bg-gray-800 border-gray-700 hover:border-amber-400"}`}>
                   {show ? (
                     <>
-                      <span className={c.kind === "h" ? "text-2xl font-bold text-gray-900" : "text-sm font-semibold text-amber-800"}>
-                        {c.text}
-                      </span>
+                      <span className={c.kind === "h" ? "text-2xl font-bold text-gray-900" : "text-sm font-semibold text-amber-800"}>{c.text}</span>
                       <span className="text-[10px] text-gray-400 mt-1">{c.kind === "h" ? "汉字" : "pinyin"}</span>
                     </>
                   ) : (
@@ -2825,19 +2462,12 @@ function MatchGame({ onWin }) {
   const right = useMemo(() => shuffle(pairs.map((p) => p.hanzi)), [pairs]);
   const done = found.length === pairs.length;
 
-  useEffect(() => {
-    if (done) onWin(pairs.length);
-  }, [done]);
+  useEffect(() => { if (done) onWin(pairs.length); }, [done]);
 
   const tryMatch = (h) => {
     if (left == null || found.includes(h)) return;
-    if (left.hanzi === h) {
-      setFound((f) => [...f, h]);
-      setLeft(null);
-    } else {
-      setWrong(h);
-      setTimeout(() => { setWrong(null); setLeft(null); }, 500);
-    }
+    if (left.hanzi === h) { setFound((f) => [...f, h]); setLeft(null); }
+    else { setWrong(h); setTimeout(() => { setWrong(null); setLeft(null); }, 500); }
   };
 
   return (
@@ -2846,53 +2476,22 @@ function MatchGame({ onWin }) {
         <div className="text-center py-5">
           <div className="text-4xl mb-2">🎉</div>
           <div className="font-bold text-gray-800">Toutes les correspondances trouvées !</div>
-          <button
-            onClick={() => { setLeft(null); setFound([]); setRound((r) => r + 1); }}
-            className="mt-3 px-4 py-2 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600"
-          >
-            Nouveau tour 🔄
-          </button>
+          <button onClick={() => { setLeft(null); setFound([]); setRound((r) => r + 1); }} className="mt-3 px-4 py-2 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600">Nouveau tour 🔄</button>
         </div>
       ) : (
         <>
-          <p className="text-xs text-gray-500 mb-3">Clique un mot (gauche), puis son pinyin (droite). Trouvés : {found.length}/{pairs.length}</p>
+          <p className="text-xs text-gray-500 mb-3">Clique un mot (gauche), puis son pinyin (droite). {found.length}/{pairs.length}</p>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               {pairs.map((p) => (
-                <button
-                  key={p.hanzi}
-                  onClick={() => setLeft(found.includes(p.hanzi) ? null : p)}
-                  disabled={found.includes(p.hanzi)}
-                  className={`w-full p-2.5 rounded-xl border-2 text-lg font-bold ${
-                    found.includes(p.hanzi)
-                      ? "bg-green-100 border-green-400 text-green-700 line-through"
-                      : left && left.hanzi === p.hanzi
-                      ? "bg-white border-amber-500 shadow"
-                      : "bg-white border-gray-300 hover:border-amber-400"
-                  }`}
-                >
-                  {p.hanzi}
-                </button>
+                <button key={p.hanzi} onClick={() => setLeft(found.includes(p.hanzi) ? null : p)} disabled={found.includes(p.hanzi)} className={`w-full p-2.5 rounded-xl border-2 text-lg font-bold ${found.includes(p.hanzi) ? "bg-green-100 border-green-400 text-green-700 line-through" : left && left.hanzi === p.hanzi ? "bg-white border-amber-500 shadow" : "bg-white border-gray-300 hover:border-amber-400"}`}>{p.hanzi}</button>
               ))}
             </div>
             <div className="space-y-2">
               {right.map((h) => {
                 const v = pairs.find((p) => p.hanzi === h);
                 return (
-                  <button
-                    key={h}
-                    onClick={() => tryMatch(h)}
-                    disabled={found.includes(h)}
-                    className={`w-full p-2.5 rounded-xl border-2 text-sm font-medium ${
-                      found.includes(h)
-                        ? "bg-green-100 border-green-400 text-green-700 line-through"
-                        : wrong === h
-                        ? "bg-red-100 border-red-400"
-                        : "bg-white border-gray-300 hover:border-amber-400"
-                    }`}
-                  >
-                    {v.pinyin}
-                  </button>
+                  <button key={h} onClick={() => tryMatch(h)} disabled={found.includes(h)} className={`w-full p-2.5 rounded-xl border-2 text-sm font-medium ${found.includes(h) ? "bg-green-100 border-green-400 text-green-700 line-through" : wrong === h ? "bg-red-100 border-red-400" : "bg-white border-gray-300 hover:border-amber-400"}`}>{v.pinyin}</button>
                 );
               })}
             </div>
@@ -2911,12 +2510,7 @@ function SentenceGame({ onWin }) {
   const [checked, setChecked] = useState(null);
   const used = (i) => built.includes(i);
 
-  const reset = () => {
-    setBuilt([]);
-    setChecked(null);
-    setRound((r) => r + 1);
-  };
-
+  const reset = () => { setBuilt([]); setChecked(null); setRound((r) => r + 1); };
   const check = () => {
     const ok = built.length === s.tokens.length && built.every((bi, k) => scrambled[bi] === s.tokens[k]);
     setChecked(ok);
@@ -2925,65 +2519,35 @@ function SentenceGame({ onWin }) {
 
   return (
     <div>
-      <p className="text-xs text-gray-500 mb-1">Reconstitue la phrase dans le bon ordre :</p>
+      <p className="text-xs text-gray-500 mb-1">Reconstitue la phrase :</p>
       <div className="font-semibold text-gray-900 mb-1">{s.fr}</div>
       <div className="text-xs text-indigo-600 mb-3">{s.py}</div>
-
       <div className="min-h-12 p-2 mb-3 rounded-xl border-2 border-dashed flex flex-wrap gap-2 items-center bg-white">
         {built.length === 0 && <span className="text-xs text-gray-300">Clique les mots ci-dessous…</span>}
         {built.map((bi, pos) => (
-          <button
-            key={pos}
-            onClick={() => setBuilt(built.filter((_, k) => k !== pos))}
-            className={`px-3 py-1.5 rounded-lg text-lg font-bold border-2 ${
-              checked == null ? "bg-amber-50 border-amber-400 hover:bg-red-50" : checked ? "bg-green-100 border-green-500" : "bg-red-100 border-red-400"
-            }`}
-          >
-            {scrambled[bi]}
-          </button>
+          <button key={pos} onClick={() => setBuilt(built.filter((_, k) => k !== pos))} className={`px-3 py-1.5 rounded-lg text-lg font-bold border-2 ${checked == null ? "bg-amber-50 border-amber-400 hover:bg-red-50" : checked ? "bg-green-100 border-green-500" : "bg-red-100 border-red-400"}`}>{scrambled[bi]}</button>
         ))}
       </div>
-
       <div className="flex flex-wrap gap-2 mb-4">
         {scrambled.map((t, i) => (
-          <button
-            key={i}
-            disabled={used(i)}
-            onClick={() => { setBuilt([...built, i]); setChecked(null); }}
-            className={`px-3 py-1.5 rounded-lg border-2 text-lg font-bold ${
-              used(i) ? "bg-gray-100 border-gray-200 text-gray-300" : "bg-white border-gray-300 hover:border-amber-500"
-            }`}
-          >
-            {t}
-          </button>
+          <button key={i} disabled={used(i)} onClick={() => { setBuilt([...built, i]); setChecked(null); }} className={`px-3 py-1.5 rounded-lg border-2 text-lg font-bold ${used(i) ? "bg-gray-100 border-gray-200 text-gray-300" : "bg-white border-gray-300 hover:border-amber-500"}`}>{t}</button>
         ))}
       </div>
-
       {checked === true && (
         <div className="text-center">
-          <div className="font-bold text-green-600 mb-2">🎉 完美 ! Parfaite phrase : {s.zh}</div>
-          <button onClick={reset} className="px-4 py-2 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600">
-            Phrase suivante 🔄
-          </button>
+          <div className="font-bold text-green-600 mb-2">🎉 完美 ! {s.zh}</div>
+          <button onClick={reset} className="px-4 py-2 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600">Phrase suivante 🔄</button>
         </div>
       )}
       {checked === false && (
         <div className="text-center">
-          <div className="text-sm text-red-600 font-bold mb-2">Presque ! Regarde bien l'ordre… (les Chinois : sujet → verbe → reste)</div>
-          <button onClick={() => { setBuilt([]); setChecked(null); }} className="px-4 py-2 rounded-xl bg-gray-800 text-white text-sm font-bold hover:bg-gray-900">
-            Réessayer
-          </button>
+          <div className="text-sm text-red-600 font-bold mb-2">Presque ! Sujet → verbe → reste</div>
+          <button onClick={() => { setBuilt([]); setChecked(null); }} className="px-4 py-2 rounded-xl bg-gray-800 text-white text-sm font-bold hover:bg-gray-900">Réessayer</button>
         </div>
       )}
       {checked == null && (
         <div className="text-center">
-          <button
-            onClick={check}
-            disabled={built.length !== s.tokens.length}
-            className="px-5 py-2 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600 disabled:opacity-40"
-          >
-            Vérifier ✓
-          </button>
+          <button onClick={check} disabled={built.length !== s.tokens.length} className="px-5 py-2 rounded-xl bg-amber-500 text-white text-sm font-bold hover:bg-amber-600 disabled:opacity-40">Vérifier ✓</button>
         </div>
       )}
     </div>
@@ -2994,34 +2558,17 @@ function Boutique({ progress, buyAvatar }) {
   const owned = progress.owned || [];
   return (
     <div className="p-5 rounded-2xl border border-yellow-300 bg-yellow-50">
-      <h3 className="font-bold text-gray-800 mb-1">🛍️ Boutique — dépense tes pièces Sagesse</h3>
-      <p className="text-xs text-gray-500 mb-4">
-        Ton avatar s'affiche dans l'en-tête de l'app. L'avatar ❤️ est réservé aux donateurs de la fondation.
-      </p>
+      <h3 className="font-bold text-gray-800 mb-1">🛍️ Boutique</h3>
+      <p className="text-xs text-gray-500 mb-4">Ton avatar s'affiche dans l'en-tête. L'avatar ❤️ est réservé aux donateurs.</p>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {AVATARS.map((a) => {
           const isOwned = a.e === "中" || owned.includes(a.e) || (a.donorOnly && progress.donor);
           const equipped = (progress.avatar || "中") === a.e;
           return (
-            <button
-              key={a.e}
-              onClick={() => { if (!isOwned && !a.donorOnly) buyAvatar(a.e, a.price); }}
-              disabled={!isOwned && a.donorOnly}
-              className={`p-3 rounded-xl border-2 text-center transition-colors ${
-                equipped
-                  ? "bg-red-600 border-red-600 text-white"
-                  : isOwned
-                  ? "bg-white border-green-400 hover:border-red-500"
-                  : a.donorOnly
-                  ? "bg-gray-100 border-gray-200 text-gray-400"
-                  : "bg-white border-gray-300 hover:border-yellow-500"
-              }`}
-            >
+            <button key={a.e} onClick={() => { if (!isOwned && !a.donorOnly) buyAvatar(a.e, a.price); }} disabled={!isOwned && a.donorOnly} className={`p-3 rounded-xl border-2 text-center transition-colors ${equipped ? "bg-red-600 border-red-600 text-white" : isOwned ? "bg-white border-green-400 hover:border-red-500" : a.donorOnly ? "bg-gray-100 border-gray-200 text-gray-400" : "bg-white border-gray-300 hover:border-yellow-500"}`}>
               <div className="text-3xl">{a.e}</div>
               <div className="text-xs font-bold mt-1">{a.label}</div>
-              <div className="text-[10px] mt-0.5">
-                {equipped ? "✓ porté" : isOwned ? "cliquer pour porter" : a.donorOnly ? "réservé donateur" : "🪙 " + a.price}
-              </div>
+              <div className="text-[10px] mt-0.5">{equipped ? "✓ porté" : isOwned ? "cliquer" : a.donorOnly ? "réservé donateur" : "🪙 " + a.price}</div>
             </button>
           );
         })}
@@ -3049,52 +2596,26 @@ function Jeux({ progress, addXp, addCoins, buyAvatar }) {
     <div>
       <div className="mb-4 flex flex-wrap gap-2 items-center">
         <h3 className="text-lg font-bold text-gray-900 mr-auto">🎮 Jeux éducatifs</h3>
-        <div className="px-3 py-1.5 rounded-xl bg-yellow-100 border border-yellow-300 text-sm font-bold text-yellow-700">
-          🪙 {progress.coins || 0} pièces
-        </div>
-        <div className="px-3 py-1.5 rounded-xl bg-rose-100 border border-rose-300 text-sm font-bold text-rose-700">
-          🤝 Cagnotte : {progress.pot || 0}
-        </div>
+        <div className="px-3 py-1.5 rounded-xl bg-yellow-100 border border-yellow-300 text-sm font-bold text-yellow-700">🪙 {progress.coins || 0}</div>
+        <div className="px-3 py-1.5 rounded-xl bg-rose-100 border border-rose-300 text-sm font-bold text-rose-700">🤝 Cagnotte : {progress.pot || 0}</div>
       </div>
-
       <div className="mb-4 flex flex-wrap gap-2">
-        {[["memory", "🀄 Memory des caractères"], ["match", "连连 · relie pinyin & mots"], ["sentence", "🧩 Reconstruis la phrase"]].map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => setGame(id)}
-            className={`px-3 py-2 rounded-xl text-sm font-medium ${game === id ? "bg-amber-500 text-white shadow" : "bg-white border border-gray-300 text-gray-600 hover:border-amber-400"}`}
-          >
-            {label}
-          </button>
+        {[["memory", "🀄 Memory"], ["match", "连连 · relie pinyin"], ["sentence", "🧩 Reconstruis"]].map(([id, label]) => (
+          <button key={id} onClick={() => setGame(id)} className={`px-3 py-2 rounded-xl text-sm font-medium ${game === id ? "bg-amber-500 text-white shadow" : "bg-white border border-gray-300 text-gray-600 hover:border-amber-400"}`}>{label}</button>
         ))}
       </div>
-
       <div className="mb-4 p-5 rounded-2xl border border-gray-200 bg-white shadow-sm">
-        {game === "memory" && (
-          <MemoryGame onWin={(m) => reward("mem-" + Date.now(), "🀄 Memory réussi ! +2 🪙 +3 XP", 2, 3)} />
-        )}
-        {game === "match" && (
-          <MatchGame onWin={() => reward("match-" + Date.now(), "连连 réussi ! +2 🪙 +3 XP", 2, 3)} />
-        )}
-        {game === "sentence" && (
-          <SentenceGame onWin={() => reward("sent-" + Date.now(), "🧩 Phrase parfaite ! +1 🪙 +2 XP", 1, 2)} />
-        )}
+        {game === "memory" && <MemoryGame onWin={(m) => reward("mem-" + Date.now(), "🀄 Memory réussi ! +2 🪙 +3 XP", 2, 3)} />}
+        {game === "match" && <MatchGame onWin={() => reward("match-" + Date.now(), "连连 réussi ! +2 🪙 +3 XP", 2, 3)} />}
+        {game === "sentence" && <SentenceGame onWin={() => reward("sent-" + Date.now(), "🧩 Phrase parfaite ! +1 🪙 +2 XP", 1, 2)} />}
       </div>
-
       <div className="fixed bottom-4 right-4 space-y-2 z-50">
-        {toasts.map((t) => (
-          <div key={t.id} className="px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-bold shadow-lg animate-pulse">
-            {t.label}
-          </div>
-        ))}
+        {toasts.map((t) => (<div key={t.id} className="px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-bold shadow-lg animate-pulse">{t.label}</div>))}
       </div>
-
       <Boutique progress={progress} buyAvatar={buyAvatar} />
     </div>
   );
 }
-
-// ------------------------------ PROFESSEUR IA ------------------------------
 
 function ProfIA({ progress, aiUsedToday, registerAI }) {
   const [key, setKey] = useState(() => {
@@ -3104,10 +2625,7 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [messages, setMessages] = useState([
-    {
-      role: "prof",
-      text: "🧑‍🏫 你好！Je suis 李老师, ton professeur IA. Pose-moi toutes tes questions sur le chinois HSK 1 : grammaire, pinyin, tons, caractères, ou demande-moi de corriger tes phrases ! 加油！",
-    },
+    { role: "prof", text: "🧑‍🏫 你好！Je suis 李老师, ton professeur IA. Pose-moi toutes tes questions sur le chinois HSK 1 ! 加油！" },
   ]);
   const chatEndRef = useRef(null);
   const freeQuota = getSettings().aiFreePerDay || FREE_AI_PER_DAY;
@@ -3133,21 +2651,15 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
           role: m.role === "user" ? "user" : "model",
           parts: [{ text: m.text }],
         }));
-        const res = await fetch(
-          "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" +
-            encodeURIComponent(key.trim()),
+        const replyText = await callGeminiWithFallback(
           {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              system_instruction: { parts: [{ text: PROF_SYSTEM_PROMPT }] },
-              contents: [...history, { role: "user", parts: [{ text }] }],
-            }),
-          }
+            system_instruction: { parts: [{ text: PROF_SYSTEM_PROMPT }] },
+            contents: [...history, { role: "user", parts: [{ text }] }],
+          },
+          key.trim(),
+          false
         );
-        const data = await res.json();
-        const parts = (((data.candidates || [])[0] || {}).content || {}).parts;
-        if (parts && parts.length && parts[0].text) reply = parts[0].text;
+        if (replyText) reply = replyText;
       } catch (e) {
         reply = null;
       }
@@ -3170,56 +2682,29 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
           <div className="font-bold text-gray-900">李老师 · Professeur IA</div>
           <div className="text-xs text-gray-500">
             {progress.donor ? (
-              <span className="text-rose-600 font-bold">❤️ Premium donateur — questions illimitées</span>
+              <span className="text-rose-600 font-bold">❤️ Premium — illimité</span>
             ) : (
-              <span>Questions restantes aujourd'hui : <b>{Math.max(0, freeQuota - aiUsedToday)} / {freeQuota}</b> · illimité avec un don ❤️ (onglet Fondation)</span>
+              <span>Restantes aujourd'hui : <b>{Math.max(0, freeQuota - aiUsedToday)} / {freeQuota}</b></span>
             )}
           </div>
         </div>
-        <button onClick={() => setShowKey((s) => !s)} className="px-3 py-1.5 rounded-full bg-white border border-indigo-300 text-xs font-medium text-indigo-700 hover:bg-indigo-100">
-          ⚙️ Clé API {key ? "✓" : ""}
-        </button>
+        <button onClick={() => setShowKey((s) => !s)} className="px-3 py-1.5 rounded-full bg-white border border-indigo-300 text-xs font-medium text-indigo-700 hover:bg-indigo-100">⚙️ Clé API {key ? "✓" : ""}</button>
       </div>
 
       {showKey && (
         <div className="p-4 rounded-2xl border border-gray-300 bg-white text-sm">
-          <p className="text-gray-600 mb-2">
-            Colle ta clé API <b>Google Gemini</b> (gratuite sur aistudio.google.com → « Get API key »). Elle reste stockée <b>uniquement sur cet appareil</b> et ne quitte jamais l'app sauf pour interroger Gemini.
-          </p>
+          <p className="text-gray-600 mb-2">Colle ta clé API <b>Google Gemini</b> (gratuite sur aistudio.google.com).</p>
           <div className="flex gap-2">
-            <input
-              type="password"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              placeholder="AIza..."
-              className="flex-1 px-3 py-2 rounded-xl border border-gray-300 font-mono text-xs"
-            />
-            <button
-              onClick={() => {
-                try { localStorage.setItem(GEMINI_KEY_STORE, key.trim()); } catch (e) {}
-                setShowKey(false);
-              }}
-              className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700"
-            >
-              Enregistrer
-            </button>
+            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="AIza..." className="flex-1 px-3 py-2 rounded-xl border border-gray-300 font-mono text-xs" />
+            <button onClick={() => { try { localStorage.setItem(GEMINI_KEY_STORE, key.trim()); } catch (e) {} setShowKey(false); }} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">Enregistrer</button>
           </div>
-          <p className="text-[10px] text-gray-400 mt-2">
-            Sans clé : le professeur hors-ligne répond avec tes leçons HSK 1. Dans la version déployée, la clé sera sécurisée côté serveur.
-          </p>
         </div>
       )}
 
       <div className="p-4 rounded-2xl border border-gray-200 bg-white shadow-sm space-y-3">
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            <div
-              className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap ${
-                m.role === "user" ? "bg-red-600 text-white rounded-br-sm" : "bg-gray-100 text-gray-800 rounded-bl-sm"
-              }`}
-            >
-              {m.text}
-            </div>
+            <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-red-600 text-white rounded-br-sm" : "bg-gray-100 text-gray-800 rounded-bl-sm"}`}>{m.text}</div>
           </div>
         ))}
         {busy && (
@@ -3232,44 +2717,23 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
 
       {limitReached && (
         <div className="p-4 rounded-2xl border border-rose-300 bg-rose-50 text-sm text-rose-800">
-          🎓 Quota gratuit atteint ({freeQuota} questions/jour). Passe en <b>Premium donateur ❤️</b> (onglet Fondation) pour des questions illimitées — chaque don soutient le programme Sauvons Nos Vies de la VIE Foundation.
+          🎓 Quota gratuit atteint ({freeQuota}/jour). Passe en <b>Premium ❤️</b> (onglet Fondation).
         </div>
       )}
 
       <div className="flex flex-wrap gap-2">
         {quick.map((q) => (
-          <button
-            key={q}
-            onClick={() => send(q)}
-            disabled={busy || limitReached}
-            className="px-3 py-1.5 rounded-full bg-white border border-gray-300 text-xs text-gray-600 hover:border-indigo-500 hover:text-indigo-600 disabled:opacity-40"
-          >
-            {q}
-          </button>
+          <button key={q} onClick={() => send(q)} disabled={busy || limitReached} className="px-3 py-1.5 rounded-full bg-white border border-gray-300 text-xs text-gray-600 hover:border-indigo-500 hover:text-indigo-600 disabled:opacity-40">{q}</button>
         ))}
       </div>
 
       <div className="flex gap-2">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") send(); }}
-          placeholder="Pose ta question au professeur… (en français ou en pinyin)"
-          className="flex-1 px-4 py-3 rounded-xl border border-gray-300 text-sm focus:border-indigo-500 outline-none"
-        />
-        <button
-          onClick={() => send()}
-          disabled={busy || limitReached || !draft.trim()}
-          className="px-5 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-40"
-        >
-          Envoyer →
-        </button>
+        <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }} placeholder="Pose ta question…" className="flex-1 px-4 py-3 rounded-xl border border-gray-300 text-sm focus:border-indigo-500 outline-none" />
+        <button onClick={() => send()} disabled={busy || limitReached || !draft.trim()} className="px-5 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-40">Envoyer →</button>
       </div>
     </div>
   );
 }
-
-// ------------------------------ FONDATION · DONS ------------------------------
 
 function Don({ progress, setDonor, addDonation, donateCoins }) {
   const waveLink = (() => {
@@ -3279,28 +2743,16 @@ function Don({ progress, setDonor, addDonation, donateCoins }) {
   const [sent, setSent] = useState(false);
   const [err, setErr] = useState("");
   const freeQuota = getSettings().aiFreePerDay || FREE_AI_PER_DAY;
-
   const setF = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
   const submit = () => {
     if (!form.ref.trim() || !form.nom.trim() || !form.wave.trim() || !form.montant.trim()) {
-      setErr("Remplis tous les champs (le WhatsApp est optionnel mais recommandé).");
+      setErr("Remplis tous les champs (WhatsApp optionnel).");
       return;
     }
-    if (!(Number(form.montant) > 0)) {
-      setErr("Le montant doit être un nombre positif (en FCFA).");
-      return;
-    }
+    if (!(Number(form.montant) > 0)) { setErr("Le montant doit être positif."); return; }
     setErr("");
-    addDonation({
-      ref: form.ref.trim(),
-      nom: form.nom.trim(),
-      wave: form.wave.trim(),
-      whatsapp: form.whatsapp.trim(),
-      montant: Number(form.montant),
-      date: todayKey(),
-      statut: "en attente de vérification",
-    });
+    addDonation({ ref: form.ref.trim(), nom: form.nom.trim(), wave: form.wave.trim(), whatsapp: form.whatsapp.trim(), montant: Number(form.montant), date: todayKey(), statut: "en attente de vérification" });
     setDonor(true);
     setSent(true);
   };
@@ -3308,107 +2760,44 @@ function Don({ progress, setDonor, addDonation, donateCoins }) {
   return (
     <div className="space-y-4">
       <div className="p-6 rounded-2xl bg-gradient-to-r from-rose-600 via-red-500 to-orange-500 text-white shadow">
-        <div className="text-xs font-bold tracking-widest opacity-80 mb-1">🌍 VIE FOUNDATION — VALEURS · INTÉGRITÉ · ÉVOLUTION</div>
+        <div className="text-xs font-bold tracking-widest opacity-80 mb-1">🌍 VIE FOUNDATION</div>
         <h3 className="text-xl md:text-2xl font-bold mb-2">❤️ Sauvons Nos Vies</h3>
         <p className="text-sm opacity-90 mb-3 italic">« Chaque action compte. Chaque vie mérite un futur. »</p>
-        <p className="text-sm opacity-90">
-          YǔLù 语路 est <b>gratuit</b> pour tous les apprenants. Propulsé par <b>Kimatey Enterprise</b>, l'app reverse
-          <b> 15% de son chiffre d'affaires</b> au programme <b>Sauvons Nos Vies</b> : Santé & Nutrition, Éducation & Inclusion,
-          Solutions Durables, Identité & Culture. Ton don amplifie cette force collective.
-        </p>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-3">
-        {[
-          ["🍎", "Santé & Nutrition", "L'urgence de vivre."],
-          ["📚", "Éducation & Inclusion", "Le pouvoir de savoir."],
-          ["🌱", "Solutions Durables", "Innover pour préserver."],
-          ["🎭", "Identité & Culture", "S'ancrer pour s'élever."],
-        ].map(([e, t, d]) => (
-          <div key={t} className="p-4 rounded-2xl border border-rose-200 bg-white flex items-center gap-3">
-            <span className="text-3xl">{e}</span>
-            <div>
-              <div className="font-bold text-gray-900 text-sm">{t}</div>
-              <div className="text-xs text-gray-500">{d}</div>
-            </div>
-          </div>
-        ))}
+        <p className="text-sm opacity-90">YǔLù 语路 est <b>gratuit</b>. Propulsé par <b>Kimatey Enterprise</b>, l'app reverse <b>15%</b> au programme <b>Sauvons Nos Vies</b>.</p>
       </div>
 
       <div className="p-5 rounded-2xl border border-rose-200 bg-white shadow-sm">
         <h4 className="font-bold text-gray-900 mb-3">🌟 Premium donateur</h4>
         <ul className="text-sm text-gray-600 space-y-1.5 mb-4">
-          <li>🧑‍🏫 Professeur IA <b>illimité</b> (au lieu de {freeQuota} questions/jour)</li>
-          <li>❤️ Avatar exclusif « Donateur » dans la boutique</li>
-          <li>🏆 Badge « Donateur · Fondation » dans tes progrès</li>
-          <li>🤝 Tu soutiens le programme Sauvons Nos Vies — « Seuls, nous avançons. Ensemble, nous changeons le monde. »</li>
+          <li>🧑‍🏫 Professeur IA <b>illimité</b> (au lieu de {freeQuota}/jour)</li>
+          <li>❤️ Avatar exclusif « Donateur »</li>
+          <li>🏆 Badge « Donateur · Fondation »</li>
         </ul>
-
         <div className="p-4 rounded-xl border-2 border-cyan-300 bg-cyan-50 mb-4">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-2xl">🌊</span>
-            <b className="text-gray-900">Étape 1 — Fais ton don avec Wave</b>
-          </div>
-          <p className="text-xs text-gray-600 mb-2">
-            Clique, entre le montant de ton choix, paie, puis note le <b>numéro de transaction</b> que Wave te donne.
-          </p>
-          <a
-            href={waveLink}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-block px-5 py-2.5 rounded-xl bg-cyan-500 text-white font-bold hover:bg-cyan-600"
-          >
-            🌊 Faire mon don via Wave →
-          </a>
+          <div className="flex items-center gap-2 mb-2"><span className="text-2xl">🌊</span><b>Étape 1 — Fais ton don avec Wave</b></div>
+          <a href={waveLink} target="_blank" rel="noreferrer" className="inline-block px-5 py-2.5 rounded-xl bg-cyan-500 text-white font-bold hover:bg-cyan-600">🌊 Faire mon don →</a>
         </div>
-
         <div className="p-4 rounded-xl border border-gray-200 bg-gray-50">
-          <b className="text-sm text-gray-900">Étape 2 — Enregistre ton don (obligatoire pour activer le premium)</b>
+          <b className="text-sm text-gray-900">Étape 2 — Enregistre ton don</b>
           <div className="grid md:grid-cols-2 gap-2 mt-2">
-            <input value={form.ref} onChange={setF("ref")} placeholder="N° de transaction Wave" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-            <input value={form.nom} onChange={setF("nom")} placeholder="Nom & prénoms du payant" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-            <input value={form.wave} onChange={setF("wave")} placeholder="N° Wave du payant" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-            <input value={form.whatsapp} onChange={setF("whatsapp")} placeholder="WhatsApp joignable (optionnel)" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-            <input value={form.montant} onChange={setF("montant")} placeholder="Montant du don (FCFA)" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
+            <input value={form.ref} onChange={setF("ref")} placeholder="N° transaction Wave" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
+            <input value={form.nom} onChange={setF("nom")} placeholder="Nom & prénoms" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
+            <input value={form.wave} onChange={setF("wave")} placeholder="N° Wave" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
+            <input value={form.whatsapp} onChange={setF("whatsapp")} placeholder="WhatsApp" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
+            <input value={form.montant} onChange={setF("montant")} placeholder="Montant (FCFA)" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
           </div>
           {err && <div className="text-xs text-red-600 mt-2">{err}</div>}
           {!sent ? (
-            <button onClick={submit} className="mt-3 w-full py-2.5 rounded-xl bg-rose-600 text-white font-bold hover:bg-rose-700">
-              ✅ J'ai payé — activer mon premium
-            </button>
+            <button onClick={submit} className="mt-3 w-full py-2.5 rounded-xl bg-rose-600 text-white font-bold hover:bg-rose-700">✅ J'ai payé — activer premium</button>
           ) : (
-            <div className="mt-3 p-3 rounded-xl bg-green-100 border border-green-400 text-sm text-green-800">
-              ❤️ Merci {form.nom} ! Ton don de <b>{form.montant} FCFA</b> (réf. {form.ref}) est enregistré — l'équipe le vérifiera.
-              Ton premium est actif dès maintenant. 加油 pour Sauvons Nos Vies !
-            </div>
+            <div className="mt-3 p-3 rounded-xl bg-green-100 border border-green-400 text-sm text-green-800">❤️ Merci {form.nom} ! Ton don de <b>{form.montant} FCFA</b> est enregistré.</div>
           )}
-          <p className="text-[10px] text-gray-400 mt-2">
-            Tes informations restent sur ton appareil dans cette version test. Sur la version en ligne (Supabase), elles seront
-            envoyées à l'admin en temps réel pour validation automatique.
-          </p>
         </div>
-
-        {(progress.donations || []).length > 0 && (
-          <div className="mt-4">
-            <b className="text-sm text-gray-900">Mes dons enregistrés :</b>
-            <div className="mt-2 space-y-1">
-              {progress.donations.map((d, i) => (
-                <div key={i} className="text-xs bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 flex justify-between">
-                  <span>{d.date} · {d.montant} FCFA · réf. {d.ref}</span>
-                  <span className={d.statut === "validé" ? "text-green-600 font-bold" : "text-amber-600"}>{d.statut}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
       <div className="p-5 rounded-2xl border border-yellow-300 bg-yellow-50">
-        <h4 className="font-bold text-gray-900 mb-1">🤝 Cagnotte collective solidaire</h4>
-        <p className="text-xs text-gray-500 mb-3">
-          Économie participative : chaque pièce 🪙 gagnée dans les jeux verse automatiquement 20% à la cagnotte de la communauté.
-          Tu peux aussi offrir directement tes pièces — un symbole de ton engagement qui compte autant qu'un don !
-        </p>
+        <h4 className="font-bold text-gray-900 mb-1">🤝 Cagnotte collective</h4>
+        <p className="text-xs text-gray-500 mb-3">20% de chaque pièce gagnée va à la cagnotte solidaire.</p>
         <div className="flex items-center gap-4">
           <div className="text-center px-4 py-2 rounded-xl bg-white border border-yellow-300">
             <div className="text-2xl font-bold text-yellow-600">🤝 {progress.pot || 0}</div>
@@ -3418,31 +2807,17 @@ function Don({ progress, setDonor, addDonation, donateCoins }) {
             <div className="text-2xl font-bold text-yellow-700">🪙 {progress.coins || 0}</div>
             <div className="text-[10px] text-yellow-700">tes pièces</div>
           </div>
-          <button
-            onClick={() => donateCoins(10)}
-            disabled={(progress.coins || 0) < 10}
-            className="px-4 py-2 rounded-xl bg-yellow-500 text-white text-sm font-bold hover:bg-yellow-600 disabled:opacity-40"
-          >
-            Offrir 10 🪙 →
-          </button>
+          <button onClick={() => donateCoins(10)} disabled={(progress.coins || 0) < 10} className="px-4 py-2 rounded-xl bg-yellow-500 text-white text-sm font-bold hover:bg-yellow-600 disabled:opacity-40">Offrir 10 🪙 →</button>
         </div>
       </div>
     </div>
   );
 }
 
-// ------------------------------ PRONONCIATION v2 ------------------------------
-
 function Prononciation({ addXp, addCoins, unlockedLessons }) {
   const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
   const [lessonFilter, setLessonFilter] = useState("all");
-  const pool = useMemo(
-    () =>
-      shuffle(
-        ALL_VOCAB.filter((v) => (lessonFilter === "all" ? unlockedLessons.includes(v.lesson) : v.lesson === lessonFilter))
-      ).slice(0, 20),
-    [lessonFilter, unlockedLessons]
-  );
+  const pool = useMemo(() => shuffle(ALL_VOCAB.filter((v) => (lessonFilter === "all" ? unlockedLessons.includes(v.lesson) : v.lesson === lessonFilter))).slice(0, 20), [lessonFilter, unlockedLessons]);
   const [idx, setIdx] = useState(0);
   const target = pool[idx] || ALL_VOCAB[0];
   const [listening, setListening] = useState(false);
@@ -3451,8 +2826,7 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
 
   const normalize = (s) => String(s || "").replace(/[。！？，、？！.,!?…]/g, "").replace(/\s/g, "").trim();
   const similarity = (a, b) => {
-    const A = normalize(a);
-    const B = normalize(b);
+    const A = normalize(a); const B = normalize(b);
     if (!A || !B) return 0;
     if (A === B) return 100;
     const setB = new Set(B.split(""));
@@ -3469,88 +2843,55 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
       rec.continuous = false;
       rec.interimResults = false;
       rec.maxAlternatives = 5;
-
       rec.onresult = (e) => {
         const res = e.results[0];
         let best = 0;
         let bestText = "";
-
         for (let k = 0; k < res.length; k++) {
           const heard = res[k].transcript;
           let sc = similarity(heard, target.hanzi);
-
           if (target.pinyin) {
             const cleanPinyin = target.pinyin.toLowerCase().replace(/[\s\d[\]·]/g, "");
             const cleanHeard = heard.toLowerCase().replace(/[\s\d[\]·]/g, "");
-            if (cleanHeard && cleanPinyin && (cleanHeard.includes(cleanPinyin) || cleanPinyin.includes(cleanHeard))) {
-              sc = Math.max(sc, 85);
-            }
+            if (cleanHeard && cleanPinyin && (cleanHeard.includes(cleanPinyin) || cleanPinyin.includes(cleanHeard))) sc = Math.max(sc, 85);
           }
-
-          if (sc > best) {
-            best = sc;
-            bestText = heard;
-          }
+          if (sc > best) { best = sc; bestText = heard; }
         }
-
         if (best > 0 && best < 60 && target.hanzi.length >= 2) {
           const half = target.hanzi.slice(0, Math.ceil(target.hanzi.length / 2));
-          if (similarity(bestText, half) >= 70) {
-            best = Math.round(best * 1.25);
-          }
+          if (similarity(bestText, half) >= 70) best = Math.round(best * 1.25);
         }
-
         const entry = recordPron(target.hanzi, best);
         setHist(getPronHist());
         setResult({ heard: bestText, score: best, entry });
         setListening(false);
-
-        if (best >= 70) {
-          addXp(3);
-          addCoins(1);
-        } else if (best >= 50) {
-          addXp(1);
-        }
+        if (best >= 70) { addXp(3); addCoins(1); }
+        else if (best >= 50) { addXp(1); }
       };
-
       rec.onerror = (e) => {
-        console.warn("Erreur de reconnaissance :", e.error);
+        console.warn("Erreur :", e.error);
         setListening(false);
         if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-          alert(
-            "🎙️ Autorise l'accès au micro pour utiliser cette fonction.\n\n" +
-            "Chrome : icône 🔒 dans la barre d'adresse → Microphone → Autoriser\n" +
-            "Android : Paramètres → Applications → Chrome → Autorisations → Microphone"
-          );
-        } else if (e.error === "no-speech") {
-          setResult({ heard: "(aucun son détecté)", score: 0, entry: { best: 0, tries: 1, first: 0, last: 0 } });
+          alert("🎙️ Autorise l'accès au micro dans les paramètres du navigateur.");
         }
       };
-
       rec.onend = () => setListening(false);
       setResult(null);
       setListening(true);
       rec.start();
     } catch (e) {
-      console.warn("Impossible de démarrer la reconnaissance :", e);
       setListening(false);
     }
   };
 
-  const nextWord = () => {
-    setResult(null);
-    setIdx((i) => (i + 1) % pool.length);
-  };
+  const nextWord = () => { setResult(null); setIdx((i) => (i + 1) % pool.length); };
 
   if (!SR) {
     return (
       <div className="p-6 rounded-2xl border border-amber-300 bg-amber-50 text-center">
         <div className="text-4xl mb-2">🎙️</div>
         <h3 className="font-bold text-gray-800 mb-1">Prononciation corrigée</h3>
-        <p className="text-sm text-gray-600">
-          La reconnaissance vocale nécessite <b>Chrome, Edge ou un Android récent</b>. Ouvre l'app dans l'un de ces
-          navigateurs (ou l'app installée sur ton téléphone) pour t'entraîner à prononcer et recevoir une note automatique.
-        </p>
+        <p className="text-sm text-gray-600">Nécessite <b>Chrome, Edge ou un Android récent</b>.</p>
       </div>
     );
   }
@@ -3558,7 +2899,6 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
   const e = result ? result.entry : hist[target.hanzi];
   const stars = result ? (result.score >= 90 ? 3 : result.score >= 70 ? 2 : result.score >= 40 ? 1 : 0) : 0;
   const improvement = e && e.first != null && e.tries > 1 ? Math.round(e.last - e.first) : null;
-
   const wordsDone = Object.keys(hist).length;
   const avgBest = wordsDone ? Math.round(Object.values(hist).reduce((s, v) => s + v.best, 0) / wordsDone) : 0;
 
@@ -3568,7 +2908,7 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
         <div className="flex items-center justify-between mb-2">
           <div>
             <h3 className="text-lg font-bold text-gray-800">🗣️ Prononce & sois corrigé</h3>
-            <p className="text-xs text-gray-500">Écoute le modèle, prononce, et reçois ta note. Répète pour progresser !</p>
+            <p className="text-xs text-gray-500">Écoute, prononce, reçois ta note.</p>
           </div>
           <div className="text-right text-xs text-green-700">
             <div className="font-bold">{wordsDone} mots travaillés</div>
@@ -3576,19 +2916,10 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5 mb-4">
-          {[["all", "Toutes mes leçons"], ...ALL_LESSONS.filter((l) => unlockedLessons.includes(l.id)).map((l) => [l.id, l.titre])].map(
-            ([id, label]) => (
-              <button
-                key={id}
-                onClick={() => { setLessonFilter(id); setIdx(0); setResult(null); }}
-                className={`px-3 py-1 rounded-full text-xs ${lessonFilter === id ? "bg-green-600 text-white" : "bg-white border border-gray-300 text-gray-600"}`}
-              >
-                {label}
-              </button>
-            )
-          )}
+          {[["all", "Toutes mes leçons"], ...ALL_LESSONS.filter((l) => unlockedLessons.includes(l.id)).map((l) => [l.id, l.titre])].map(([id, label]) => (
+            <button key={id} onClick={() => { setLessonFilter(id); setIdx(0); setResult(null); }} className={`px-3 py-1 rounded-full text-xs ${lessonFilter === id ? "bg-green-600 text-white" : "bg-white border border-gray-300 text-gray-600"}`}>{label}</button>
+          ))}
         </div>
-
         {target && (
           <div className="p-5 rounded-xl bg-white border border-green-200 text-center">
             <div className="text-6xl font-bold text-gray-900 my-2">{target.hanzi}</div>
@@ -3598,251 +2929,81 @@ function Prononciation({ addXp, addCoins, unlockedLessons }) {
               <EcouterBtn text={target.hanzi} />
               <EcouterBtn text={target.hanzi} slow label="lentement" />
             </div>
-            <button
-              onClick={start}
-              disabled={listening}
-              className={`px-8 py-3 rounded-full text-white font-bold shadow transition-all ${listening ? "bg-red-500 animate-pulse" : "bg-green-600 hover:bg-green-700"}`}
-            >
+            <button onClick={start} disabled={listening} className={`px-8 py-3 rounded-full text-white font-bold shadow transition-all ${listening ? "bg-red-500 animate-pulse" : "bg-green-600 hover:bg-green-700"}`}>
               {listening ? "🎙️ Je t'écoute… parle !" : "🎙️ Prononcer maintenant"}
             </button>
-
             {result && (
               <div className="mt-5 text-left p-4 rounded-xl border-2 border-gray-200 bg-gray-50">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm">
-                    🗣️ Entendu : <b>{result.heard || "…"}</b>
-                  </span>
-                  <span className={`text-2xl font-bold ${result.score >= 70 ? "text-green-600" : result.score >= 40 ? "text-amber-500" : "text-red-500"}`}>
-                    {result.score}%
-                  </span>
+                  <span className="text-sm">🗣️ Entendu : <b>{result.heard || "…"}</b></span>
+                  <span className={`text-2xl font-bold ${result.score >= 70 ? "text-green-600" : result.score >= 40 ? "text-amber-500" : "text-red-500"}`}>{result.score}%</span>
                 </div>
                 <div className="text-2xl mb-2">{"⭐".repeat(stars) || "💪"}</div>
                 <div className="h-2 bg-gray-200 rounded-full overflow-hidden mb-2">
                   <div className={`h-full rounded-full ${result.score >= 70 ? "bg-green-500" : result.score >= 40 ? "bg-amber-400" : "bg-red-400"}`} style={{ width: result.score + "%" }} />
                 </div>
                 <div className="text-xs text-gray-600">
-                  {result.score >= 90
-                    ? "🎉 完美！Parfait, comme un natif ! +3 XP +1 🪙"
-                    : result.score >= 70
-                    ? "✓ Bien prononcé ! +3 XP +1 🪙 — essaie d'atteindre 90% pour 3 étoiles"
-                    : result.score >= 50
-                    ? "👍 Pas mal ! +1 XP — réécoute le modèle (🐢) et réessaie pour gagner plus"
-                    : result.score >= 40
-                    ? "🔍 Presque ! Réécoute le modèle lentement (🐢) et réessaie — le 声调 (ton) fait toute la différence"
-                    : "😅 Le mot entendu est très différent. Écoute le modèle 2 fois, puis répète doucement"}
+                  {result.score >= 90 ? "🎉 完美！Parfait ! +3 XP +1 🪙"
+                    : result.score >= 70 ? "✓ Bien prononcé ! +3 XP +1 🪙"
+                    : result.score >= 50 ? "👍 Pas mal ! +1 XP"
+                    : result.score >= 40 ? "🔍 Presque ! Réécoute le modèle lentement."
+                    : "😅 Le mot entendu est très différent."}
                   {improvement != null && (
                     <div className={`mt-1 font-bold ${improvement >= 0 ? "text-green-600" : "text-red-500"}`}>
-                      {improvement >= 0 ? "📈" : "📉"} {improvement >= 0 ? "+" : ""}{improvement}% depuis ta 1re tentative (meilleur score : {e.best}%)
+                      {improvement >= 0 ? "📈" : "📉"} {improvement >= 0 ? "+" : ""}{improvement}% depuis ta 1re tentative
                     </div>
                   )}
                 </div>
               </div>
             )}
-
-            <button onClick={nextWord} className="mt-4 px-5 py-2 rounded-xl bg-gray-800 text-white text-sm font-bold hover:bg-gray-900">
-              Mot suivant →
-            </button>
+            <button onClick={nextWord} className="mt-4 px-5 py-2 rounded-xl bg-gray-800 text-white text-sm font-bold hover:bg-gray-900">Mot suivant →</button>
           </div>
         )}
       </div>
-
-      {wordsDone > 0 && (
-        <div className="p-5 rounded-2xl border border-gray-200 bg-white">
-          <h4 className="font-bold text-gray-800 mb-2">📊 Tes progrès en prononciation</h4>
-          <div className="space-y-1">
-            {Object.entries(hist)
-              .sort((a, b) => b[1].best - a[1].best)
-              .slice(0, 8)
-              .map(([w, h]) => (
-                <div key={w} className="flex items-center gap-2 text-xs">
-                  <span className="font-bold text-gray-800 w-20">{w}</span>
-                  <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-green-500 rounded-full" style={{ width: h.best + "%" }} />
-                  </div>
-                  <span className="text-gray-500 w-24 text-right">{h.best}% · {h.tries} essai{h.tries > 1 ? "s" : ""}</span>
-                </div>
-              ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-// ------------------------------ ESPACE ADMIN ------------------------------
-
 function Admin({ progress, setDonor, setGoal, addXp }) {
   const [pinInput, setPinInput] = useState("");
   const [authed, setAuthed] = useState(false);
-  const [section, setSection] = useState("stats");
+  const [section, setSection] = useState("studio");
   const [toast, setToast] = useState("");
   const [settings, setSettings] = useState(getSettings());
   const [catalog, setCatalog] = useState(() => {
-    try {
-      return Object.assign({ lessons: [], quiz: [], vocab: [] }, JSON.parse(localStorage.getItem(CATALOG_KEY) || "{}"));
-    } catch (e) {
-      return { lessons: [], quiz: [], vocab: [] };
-    }
+    try { return Object.assign({ lessons: [], quiz: [], vocab: [] }, JSON.parse(localStorage.getItem(CATALOG_KEY) || "{}")); }
+    catch (e) { return { lessons: [], quiz: [], vocab: [] }; }
   });
-  const [newLesson, setNewLesson] = useState({ titre: "", zh: "", pinyin: "", fr: "" });
-  const [vocabDraft, setVocabDraft] = useState({ lesson: 1, hanzi: "", pinyin: "", fr: "" });
-  const [quizDraft, setQuizDraft] = useState({ lesson: 1, question: "", o0: "", o1: "", o2: "", o3: "", answer: 0 });
-  const [iaTopic, setIaTopic] = useState("");
-  const [iaBusy, setIaBusy] = useState(false);
-  const [iaPreview, setIaPreview] = useState(null);
-  const [iaErr, setIaErr] = useState("");
 
-  const notify = (m) => {
-    setToast(m);
-    setTimeout(() => setToast(""), 3000);
-  };
-
-  const persistCatalog = (next) => {
-    setCatalog(next);
-    try { localStorage.setItem(CATALOG_KEY, JSON.stringify(next)); } catch (e) {}
-  };
+  const notify = (m) => { setToast(m); setTimeout(() => setToast(""), 3000); };
+  const persistCatalog = (next) => { setCatalog(next); try { localStorage.setItem(CATALOG_KEY, JSON.stringify(next)); } catch (e) {} };
 
   if (!authed) {
     return (
       <div className="max-w-sm mx-auto p-6 rounded-2xl border border-gray-300 bg-white shadow text-center">
         <div className="text-4xl mb-2">🔒</div>
         <h3 className="font-bold text-gray-900 mb-1">Espace admin — YǔLù 语路</h3>
-        <p className="text-xs text-gray-500 mb-4">Gestion du catalogue de cours, de la facturation et des dons.</p>
         <input
           type="password"
           value={pinInput}
           onChange={(e) => setPinInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && pinInput === ADMIN_PIN) setAuthed(true); }}
-          placeholder="Code PIN admin"
+          placeholder="Code PIN"
           className="w-full px-4 py-2.5 rounded-xl border border-gray-300 text-center tracking-widest"
         />
-        <button
-          onClick={() => { if (pinInput === ADMIN_PIN) setAuthed(true); else notify("Code incorrect"); }}
-          className="mt-3 w-full py-2.5 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800"
-        >
-          Déverrouiller
-        </button>
-        <p className="text-[10px] text-gray-400 mt-2">Code par défaut : 2026 (modifiable dans le code — ADMIN_PIN)</p>
+        <button onClick={() => { if (pinInput === ADMIN_PIN) setAuthed(true); else notify("Code incorrect"); }} className="mt-3 w-full py-2.5 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800">Déverrouiller</button>
+        <p className="text-[10px] text-gray-400 mt-2">PIN : 2026</p>
         {toast && <div className="mt-2 text-xs text-red-600">{toast}</div>}
       </div>
     );
   }
 
-  const misses = getMisses();
-  const topMisses = Object.entries(misses).sort((a, b) => b[1] - a[1]).slice(0, 10);
   const donations = progress.donations || [];
-
-  const addLesson = () => {
-    if (!newLesson.titre.trim() || !newLesson.zh.trim()) return notify("Titre et caractère requis");
-    const id = Math.max(5, ...catalog.lessons.map((l) => l.id || 5)) + 1;
-    persistCatalog({
-      ...catalog,
-      lessons: [
-        ...catalog.lessons,
-        {
-          id,
-          titre: newLesson.titre,
-          zh: newLesson.zh,
-          pinyin: newLesson.pinyin,
-          fr: newLesson.fr,
-          sections: [{ titre: "Vocabulaire", vocab: [] }],
-          phrases: [],
-          pinyinNotes: [],
-        },
-      ],
-    });
-    setNewLesson({ titre: "", zh: "", pinyin: "", fr: "" });
-    notify("✅ Leçon ajoutée — recharge l'app pour la voir dans le parcours");
-  };
-
-  const addVocab = () => {
-    if (!vocabDraft.hanzi.trim()) return notify("Caractère requis");
-    persistCatalog({ ...catalog, vocab: [...(catalog.vocab || []), { ...vocabDraft }] });
-    setVocabDraft({ ...vocabDraft, hanzi: "", pinyin: "", fr: "" });
-    notify("✅ Mot ajouté — visible après rechargement (fiches, jeux, express, prononciation)");
-  };
-
-  const addQuiz = () => {
-    if (!quizDraft.question.trim() || !quizDraft.o0.trim()) return notify("Question et option 1 requises");
-    const q = {
-      lesson: quizDraft.lesson,
-      type: "Admin",
-      question: quizDraft.question,
-      options: [quizDraft.o0, quizDraft.o1, quizDraft.o2, quizDraft.o3],
-      answer: Number(quizDraft.answer) || 0,
-    };
-    persistCatalog({ ...catalog, quiz: [...catalog.quiz, q] });
-    setQuizDraft({ ...quizDraft, question: "", o0: "", o1: "", o2: "", o3: "" });
-    notify("✅ Question ajoutée à la banque de quiz");
-  };
-
-  const deleteCustomLesson = (id) => {
-    persistCatalog({
-      ...catalog,
-      lessons: catalog.lessons.filter((l) => l.id !== id),
-      quiz: catalog.quiz.filter((q) => q.lesson !== id),
-    });
-    notify("🗑️ Leçon supprimée — recharge l'app");
-  };
-
-  const saveSettingsNow = (s) => {
-    setSettings(s);
-    saveSettings(s);
-  };
-
-  const iaGenerate = async () => {
-    const key = (() => { try { return localStorage.getItem(GEMINI_KEY_STORE) || ""; } catch (e) { return ""; } })();
-    if (!iaTopic.trim()) return notify("Décris d'abord le cours à créer");
-    if (!key) return notify("Ajoute ta clé API Gemini dans l'onglet Prof IA (⚙️) d'abord");
-    setIaBusy(true);
-    setIaErr("");
-    setIaPreview(null);
-    try {
-      const data = await askGeminiJSON(
-        "Tu es concepteur pédagogique HSK 1 (débutant absolu, niveau A1). Crée une mini-leçon de chinois mandarin sur : " +
-          iaTopic +
-          ". Réponds UNIQUEMENT avec du JSON valide (aucun texte autour, pas de markdown), exactement au format : {\"lesson\":{\"titre\":\"Leçon X — ...\",\"zh\":\"2-4 caractères\",\"pinyin\":\"...\",\"fr\":\"...\"},\"vocab\":[{\"hanzi\":\"...\",\"pinyin\":\"...\",\"fr\":\"...\"}],\"quiz\":[{\"question\":\"...\",\"options\":[\"...\",\"...\",\"...\",\"...\"],\"answer\":0}],\"phrases\":[{\"zh\":\"...\",\"pinyin\":\"...\",\"fr\":\"...\"}]}. Contraintes : 8 mots de vocabulaire maximum (listes HSK 1 si possible), 6 questions de quiz avec 4 options chacune (answer = index de la bonne option, varie les index), 3 phrases clés, traductions en français, explications implicites niveau débutant.",
-        key
-      );
-      if (!data.lesson || !Array.isArray(data.vocab)) throw new Error("format");
-      setIaPreview(data);
-    } catch (e) {
-      setIaErr("Impossible de générer (clé invalide ou quota dépassé ?). Vérifie la clé dans l'onglet Prof IA.");
-    }
-    setIaBusy(false);
-  };
-
-  const iaValidate = () => {
-    const id = Math.max(5, ...catalog.lessons.map((l) => l.id || 5)) + 1;
-    persistCatalog({
-      ...catalog,
-      lessons: [
-        ...catalog.lessons,
-        {
-          id,
-          titre: iaPreview.lesson.titre || "Leçon " + id,
-          zh: iaPreview.lesson.zh || "汉语",
-          pinyin: iaPreview.lesson.pinyin || "",
-          fr: iaPreview.lesson.fr || "",
-          sections: [{ titre: "Vocabulaire", vocab: iaPreview.vocab.slice(0, 10) }],
-          phrases: (iaPreview.phrases || []).slice(0, 4),
-          pinyinNotes: [],
-        },
-      ],
-      quiz: [...catalog.quiz, ...(iaPreview.quiz || []).slice(0, 10).map((q) => ({ ...q, lesson: id, type: "IA" }))],
-    });
-    setIaPreview(null);
-    setIaTopic("");
-    notify("✅ Leçon IA ajoutée au catalogue — recharge l'app");
-  };
 
   const SECTIONS = [
     ["studio", "🎬 Studio IA"],
-    ["stats", "📊 Retours apprenants"],
-    ["catalogue", "📚 Catalogue de cours"],
-    ["ia", "🤖 Concepteur IA"],
-    ["facturation", "💳 Facturation & limites"],
-    ["dons", "🌊 Dons reçus"],
+    ["facturation", "💳 Facturation"],
+    ["dons", "🌊 Dons"],
   ];
 
   return (
@@ -3851,220 +3012,84 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
         <span className="text-2xl">⚙️</span>
         <div className="mr-auto">
           <div className="font-bold">Espace admin — YǔLù 语路</div>
-          <div className="text-xs opacity-70">Gère ton application et améliore-la avec les retours des apprenants</div>
+          <div className="text-xs opacity-70">Gère ton application</div>
         </div>
-        <div className="text-xs px-3 py-1 rounded-full bg-white/10">{settings.billingOn ? "💳 Facturation ON" : "🆓 Version free"}</div>
       </div>
 
       <div className="flex flex-wrap gap-1.5">
         {SECTIONS.map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => setSection(id)}
-            className={`px-3 py-2 rounded-xl text-xs md:text-sm font-medium ${section === id ? "bg-gray-900 text-white" : "bg-white border border-gray-300 text-gray-600 hover:border-gray-500"}`}
-          >
-            {label}
-          </button>
+          <button key={id} onClick={() => setSection(id)} className={`px-3 py-2 rounded-xl text-xs md:text-sm font-medium ${section === id ? "bg-gray-900 text-white" : "bg-white border border-gray-300 text-gray-600 hover:border-gray-500"}`}>{label}</button>
         ))}
       </div>
 
       {toast && <div className="p-3 rounded-xl bg-gray-900 text-white text-sm font-bold text-center">{toast}</div>}
 
-      {section === "stats" && (
-        <div className="p-5 rounded-2xl border border-gray-200 bg-white">
-          <h4 className="font-bold text-gray-900 mb-1">📊 Apprendre des utilisateurs</h4>
-          <p className="text-xs text-gray-500 mb-4">
-            Les questions les plus souvent ratées par les apprenants — tes priorités pour améliorer les cours.
-          </p>
-          {topMisses.length === 0 ? (
-            <p className="text-sm text-gray-400">Aucune erreur enregistrée pour l'instant.</p>
-          ) : (
-            <div className="space-y-1">
-              {topMisses.map(([q, n]) => (
-                <div key={q} className="flex items-center gap-2 text-sm">
-                  <span className="px-2 py-0.5 rounded bg-red-100 text-red-700 font-bold text-xs">{n}×</span>
-                  <span className="text-gray-700">{q}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="mt-5 pt-4 border-t border-gray-100 grid grid-cols-2 md:grid-cols-4 gap-2 text-center">
-            {[
-              ["⚡ XP total", progress.xp],
-              ["🔥 Série", computeStreak(progress.history)],
-              ["🪙 Pièces", progress.coins || 0],
-              ["🗣️ Mots prononcés", Object.keys(getPronHist()).length],
-            ].map(([l, v]) => (
-              <div key={l} className="p-3 rounded-xl bg-gray-50">
-                <div className="font-bold text-gray-800">{v}</div>
-                <div className="text-[10px] text-gray-500">{l}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {section === "catalogue" && (
-        <div className="space-y-4">
-          <div className="p-5 rounded-2xl border border-gray-200 bg-white">
-            <h4 className="font-bold text-gray-900 mb-3">➕ Nouvelle leçon</h4>
-            <div className="grid md:grid-cols-4 gap-2">
-              <input value={newLesson.titre} onChange={(e) => setNewLesson({ ...newLesson, titre: e.target.value })} placeholder="Titre (ex: Leçon 6)" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-              <input value={newLesson.zh} onChange={(e) => setNewLesson({ ...newLesson, zh: e.target.value })} placeholder="汉字 (ex: 颜色)" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-              <input value={newLesson.pinyin} onChange={(e) => setNewLesson({ ...newLesson, pinyin: e.target.value })} placeholder="Pinyin (ex: yánsè)" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-              <input value={newLesson.fr} onChange={(e) => setNewLesson({ ...newLesson, fr: e.target.value })} placeholder="Traduction" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-            </div>
-            <button onClick={addLesson} className="mt-2 px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-bold hover:bg-gray-800">Créer la leçon</button>
-          </div>
-
-          <div className="p-5 rounded-2xl border border-gray-200 bg-white">
-            <h4 className="font-bold text-gray-900 mb-3">➕ Ajouter du vocabulaire</h4>
-            <div className="grid md:grid-cols-5 gap-2">
-              <select value={vocabDraft.lesson} onChange={(e) => setVocabDraft({ ...vocabDraft, lesson: Number(e.target.value) })} className="px-3 py-2 rounded-lg border border-gray-300 text-sm">
-                {ALL_LESSONS.map((l) => (
-                  <option key={l.id} value={l.id}>{l.titre} · {l.zh}</option>
-                ))}
-              </select>
-              <input value={vocabDraft.hanzi} onChange={(e) => setVocabDraft({ ...vocabDraft, hanzi: e.target.value })} placeholder="汉字" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-              <input value={vocabDraft.pinyin} onChange={(e) => setVocabDraft({ ...vocabDraft, pinyin: e.target.value })} placeholder="Pinyin" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-              <input value={vocabDraft.fr} onChange={(e) => setVocabDraft({ ...vocabDraft, fr: e.target.value })} placeholder="Français" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-              <button onClick={addVocab} className="px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-bold hover:bg-gray-800">Ajouter</button>
-            </div>
-          </div>
-
-          <div className="p-5 rounded-2xl border border-gray-200 bg-white">
-            <h4 className="font-bold text-gray-900 mb-3">➕ Ajouter une question de quiz</h4>
-            <div className="grid md:grid-cols-2 gap-2 mb-2">
-              <select value={quizDraft.lesson} onChange={(e) => setQuizDraft({ ...quizDraft, lesson: Number(e.target.value) })} className="px-3 py-2 rounded-lg border border-gray-300 text-sm">
-                {ALL_LESSONS.map((l) => (
-                  <option key={l.id} value={l.id}>{l.titre}</option>
-                ))}
-              </select>
-              <input value={quizDraft.question} onChange={(e) => setQuizDraft({ ...quizDraft, question: e.target.value })} placeholder="La question" className="px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-            </div>
-            <div className="grid md:grid-cols-2 gap-2 mb-2">
-              {[0, 1, 2, 3].map((i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    checked={Number(quizDraft.answer) === i}
-                    onChange={() => setQuizDraft({ ...quizDraft, answer: i })}
-                    className="accent-green-600"
-                  />
-                  <input
-                    value={quizDraft["o" + i]}
-                    onChange={(e) => setQuizDraft({ ...quizDraft, ["o" + i]: e.target.value })}
-                    placeholder={"Option " + (i + 1) + (i === 0 ? " (coche la bonne réponse)" : "")}
-                    className="flex-1 px-3 py-2 rounded-lg border border-gray-300 text-sm"
-                  />
-                </div>
-              ))}
-            </div>
-            <button onClick={addQuiz} className="px-4 py-2 rounded-xl bg-gray-900 text-white text-sm font-bold hover:bg-gray-800">Ajouter la question</button>
-          </div>
-
-          {catalog.lessons.length > 0 && (
-            <div className="p-5 rounded-2xl border border-gray-200 bg-white">
-              <h4 className="font-bold text-gray-900 mb-2">Leçons personnalisées ({catalog.lessons.length})</h4>
-              {catalog.lessons.map((l) => (
-                <div key={l.id} className="flex items-center justify-between text-sm py-1 border-b border-gray-100">
-                  <span>Leçon {l.id} · {l.titre} · {l.zh}</span>
-                  <button onClick={() => deleteCustomLesson(l.id)} className="text-red-500 hover:font-bold">🗑️</button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {section === "studio" && (
-  <Studio
-    geminiKey={(() => {
-      try { return localStorage.getItem(GEMINI_KEY_STORE) || ""; } catch (e) { return ""; }
-    })()}
-    existingLessons={ALL_LESSONS}
-    onPublish={(lessonData) => {
-      // 1. Ajouter la leçon au catalogue
-      const newCatalog = {
-        ...catalog,
-        lessons: [
-          ...catalog.lessons,
-          {
-            id: lessonData.lesson.id,
-            titre: lessonData.lesson.titre,
-            zh: lessonData.lesson.zh,
-            pinyin: lessonData.lesson.pinyin,
-            fr: lessonData.lesson.fr,
-            sections: lessonData.sections,
-            phrases: lessonData.phrases,
-            pinyinNotes: lessonData.pinyinNotes,
-            caracteres: lessonData.caracteres,
-          },
-        ],
-        quiz: [...catalog.quiz, ...lessonData.quiz],
-      };
-      persistCatalog(newCatalog);
-
-      // 2. Sauvegarder les dialogues custom
-      try {
-        const dialoguesKey = "hsk1-dialogues-custom-v1";
-        const existing = JSON.parse(localStorage.getItem(dialoguesKey) || "{}");
-        if (lessonData.dialogues?.length) {
-          existing[lessonData.lesson.id] = lessonData.dialogues;
-          localStorage.setItem(dialoguesKey, JSON.stringify(existing));
-        }
-      } catch (e) {}
-
-      notify(`✅ "${lessonData.lesson.titre}" publiée !`);
-    }}
-  />
-)}
+        <Studio
+          geminiKey={(() => { try { return localStorage.getItem(GEMINI_KEY_STORE) || ""; } catch (e) { return ""; } })()}
+          existingLessons={ALL_LESSONS}
+          onPublish={(lessonData) => {
+            const newCatalog = {
+              ...catalog,
+              lessons: [
+                ...catalog.lessons,
+                {
+                  id: lessonData.lesson.id,
+                  titre: lessonData.lesson.titre,
+                  zh: lessonData.lesson.zh,
+                  pinyin: lessonData.lesson.pinyin,
+                  fr: lessonData.lesson.fr,
+                  sections: lessonData.sections,
+                  phrases: lessonData.phrases,
+                  pinyinNotes: lessonData.pinyinNotes,
+                  caracteres: lessonData.caracteres,
+                },
+              ],
+              quiz: [...catalog.quiz, ...lessonData.quiz],
+            };
+            persistCatalog(newCatalog);
+            try {
+              const dialoguesKey = "hsk1-dialogues-custom-v1";
+              const existing = JSON.parse(localStorage.getItem(dialoguesKey) || "{}");
+              if (lessonData.dialogues?.length) {
+                existing[lessonData.lesson.id] = lessonData.dialogues;
+                localStorage.setItem(dialoguesKey, JSON.stringify(existing));
+              }
+            } catch (e) {}
+            notify(`✅ "${lessonData.lesson.titre}" publiée !`);
+          }}
+        />
+      )}
 
       {section === "facturation" && (
         <div className="p-5 rounded-2xl border border-gray-200 bg-white space-y-4">
           <h4 className="font-bold text-gray-900">💳 Facturation, limites & version</h4>
           <div className="p-4 rounded-xl border border-cyan-200 bg-cyan-50">
-            <b className="text-sm">Version actuelle : {settings.billingOn ? "Payante (dons premium actifs)" : "Gratuite (test)"}</b>
-            <p className="text-xs text-gray-600 mt-1 mb-2">
-              En version free, tout est ouvert pour tester : prof IA, jeux, prononciation. Active la facturation pour limiter le prof IA au quota gratuit et rendre le premium (dons) payant.
-            </p>
+            <b className="text-sm">Version actuelle : {settings.billingOn ? "Payante" : "Gratuite (test)"}</b>
             <button
-              onClick={() => saveSettingsNow({ ...settings, billingOn: !settings.billingOn })}
-              className={`px-4 py-2 rounded-xl text-white text-sm font-bold ${settings.billingOn ? "bg-gray-500 hover:bg-gray-600" : "bg-cyan-600 hover:bg-cyan-700"}`}
+              onClick={() => { const s = { ...settings, billingOn: !settings.billingOn }; setSettings(s); saveSettings(s); }}
+              className={`block mt-2 px-4 py-2 rounded-xl text-white text-sm font-bold ${settings.billingOn ? "bg-gray-500" : "bg-cyan-600 hover:bg-cyan-700"}`}
             >
-              {settings.billingOn ? "↩️ Revenir en version free" : "🚀 Activer la facturation"}
+              {settings.billingOn ? "↩️ Revenir en free" : "🚀 Activer la facturation"}
             </button>
           </div>
           <div>
-            <label className="text-sm font-bold text-gray-800">Questions IA gratuites / jour (sans don)</label>
+            <label className="text-sm font-bold text-gray-800">Questions IA gratuites / jour</label>
             <div className="flex gap-2 mt-1">
               {[3, 5, 10, 20].map((n) => (
-                <button
-                  key={n}
-                  onClick={() => saveSettingsNow({ ...settings, aiFreePerDay: n })}
-                  className={`px-4 py-2 rounded-xl border text-sm font-bold ${settings.aiFreePerDay === n ? "bg-gray-900 text-white border-gray-900" : "bg-white border-gray-300"}`}
-                >
-                  {n}
-                </button>
+                <button key={n} onClick={() => { const s = { ...settings, aiFreePerDay: n }; setSettings(s); saveSettings(s); }} className={`px-4 py-2 rounded-xl border text-sm font-bold ${settings.aiFreePerDay === n ? "bg-gray-900 text-white border-gray-900" : "bg-white border-gray-300"}`}>{n}</button>
               ))}
             </div>
           </div>
           <div>
-            <label className="text-sm font-bold text-gray-800">Lien de paiement Wave</label>
-            <input
-              value={localStorage.getItem(WAVE_LINK_STORE) || ""}
-              onChange={(e) => { try { localStorage.setItem(WAVE_LINK_STORE, e.target.value); } catch (er) {} }}
-              className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 text-sm"
-              placeholder="https://pay.wave.com/m/..."
-            />
+            <label className="text-sm font-bold text-gray-800">Lien Wave</label>
+            <input value={localStorage.getItem(WAVE_LINK_STORE) || ""} onChange={(e) => { try { localStorage.setItem(WAVE_LINK_STORE, e.target.value); } catch (er) {} }} className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 text-sm" placeholder="https://pay.wave.com/m/..." />
           </div>
           <div>
-            <label className="text-sm font-bold text-gray-800">Objectif XP / jour (test)</label>
+            <label className="text-sm font-bold text-gray-800">Objectif XP/jour</label>
             <div className="flex gap-2 mt-1">
               {[20, 40, 60, 100].map((n) => (
-                <button key={n} onClick={() => setGoal(n)} className="px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm font-bold">
-                  {n}
-                </button>
+                <button key={n} onClick={() => setGoal(n)} className="px-4 py-2 rounded-xl border border-gray-300 bg-white text-sm font-bold">{n}</button>
               ))}
             </div>
           </div>
@@ -4074,9 +3099,9 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
       {section === "dons" && (
         <div className="p-5 rounded-2xl border border-gray-200 bg-white">
           <h4 className="font-bold text-gray-900 mb-1">🌊 Dons reçus (Wave)</h4>
-          <p className="text-xs text-gray-500 mb-3">Vérifie chaque référence dans ton compte marchand Wave, puis valide le premium du donateur.</p>
+          <p className="text-xs text-gray-500 mb-3">Vérifie chaque référence, puis valide le premium du donateur.</p>
           {donations.length === 0 ? (
-            <p className="text-sm text-gray-400">Aucun don enregistré pour l'instant.</p>
+            <p className="text-sm text-gray-400">Aucun don enregistré.</p>
           ) : (
             <div className="space-y-2">
               {donations.map((d, i) => (
@@ -4085,43 +3110,30 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
                     <span>{d.nom} — {d.montant} FCFA</span>
                     <span className={d.statut === "validé" ? "text-green-600" : d.statut === "rejeté" ? "text-red-500" : "text-amber-600"}>{d.statut}</span>
                   </div>
-                  <div className="text-xs text-gray-500">
-                    Réf : {d.ref} · Wave : {d.wave} · WhatsApp : {d.whatsapp || "—"} · {d.date}
-                  </div>
+                  <div className="text-xs text-gray-500">Réf : {d.ref} · Wave : {d.wave} · {d.date}</div>
                   <div className="flex gap-2 mt-2">
-                    <button
-                      onClick={() => {
-                        const next = [...donations];
-                        next[i] = { ...d, statut: "validé" };
-                        addXp(0);
-                        setDonor(true);
-                        try {
-                          const raw = JSON.parse(localStorage.getItem(STORE_KEY));
-                          raw.donations = next;
-                          localStorage.setItem(STORE_KEY, JSON.stringify(raw));
-                          window.location.reload();
-                        } catch (e) {}
-                      }}
-                      className="px-3 py-1 rounded-lg bg-green-600 text-white text-xs font-bold"
-                    >
-                      ✓ Valider
-                    </button>
-                    <button
-                      onClick={() => {
-                        const next = [...donations];
-                        next[i] = { ...d, statut: "rejeté" };
-                        try {
-                          const raw = JSON.parse(localStorage.getItem(STORE_KEY));
-                          raw.donations = next;
-                          raw.donor = false;
-                          localStorage.setItem(STORE_KEY, JSON.stringify(raw));
-                          window.location.reload();
-                        } catch (e) {}
-                      }}
-                      className="px-3 py-1 rounded-lg bg-red-500 text-white text-xs font-bold"
-                    >
-                      ✕ Rejeter
-                    </button>
+                    <button onClick={() => {
+                      const next = [...donations];
+                      next[i] = { ...d, statut: "validé" };
+                      setDonor(true);
+                      try {
+                        const raw = JSON.parse(localStorage.getItem(STORE_KEY));
+                        raw.donations = next;
+                        localStorage.setItem(STORE_KEY, JSON.stringify(raw));
+                        window.location.reload();
+                      } catch (e) {}
+                    }} className="px-3 py-1 rounded-lg bg-green-600 text-white text-xs font-bold">✓ Valider</button>
+                    <button onClick={() => {
+                      const next = [...donations];
+                      next[i] = { ...d, statut: "rejeté" };
+                      try {
+                        const raw = JSON.parse(localStorage.getItem(STORE_KEY));
+                        raw.donations = next;
+                        raw.donor = false;
+                        localStorage.setItem(STORE_KEY, JSON.stringify(raw));
+                        window.location.reload();
+                      } catch (e) {}
+                    }} className="px-3 py-1 rounded-lg bg-red-500 text-white text-xs font-bold">✕ Rejeter</button>
                   </div>
                 </div>
               ))}
@@ -4132,8 +3144,6 @@ function Admin({ progress, setDonor, setGoal, addXp }) {
     </div>
   );
 }
-
-// ============================== PROGRÈS ==============================
 
 function lastNDays(history, n) {
   const arr = [];
@@ -4161,9 +3171,9 @@ function Progres({ progress, setGoal }) {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         {[
           { label: "XP total", value: "⚡ " + progress.xp, sub: "Niveau " + level },
-          { label: "Série", value: "🔥 " + streak, sub: streak > 0 ? "jour" + (streak > 1 ? "s" : "") + " d'affilée" : "commence aujourd'hui !" },
-          { label: "Étapes validées", value: "✅ " + doneNodes + "/" + NODES.length, sub: Math.round((doneNodes / NODES.length) * 100) + "% du parcours" },
-          { label: "Meilleur score moyen", value: "📊 " + avgBest + "%", sub: activeDays + " jour(s) d'entraînement" },
+          { label: "Série", value: "🔥 " + streak, sub: streak > 0 ? "jour" + (streak > 1 ? "s" : "") + " d'affilée" : "commence !" },
+          { label: "Étapes validées", value: "✅ " + doneNodes + "/" + NODES.length, sub: Math.round((doneNodes / NODES.length) * 100) + "%" },
+          { label: "Score moyen", value: "📊 " + avgBest + "%", sub: activeDays + " jour(s)" },
         ].map((c, i) => (
           <div key={i} className="p-4 rounded-2xl border border-gray-200 bg-white shadow-sm text-center">
             <div className="text-2xl font-bold text-gray-900">{c.value}</div>
@@ -4175,7 +3185,7 @@ function Progres({ progress, setGoal }) {
 
       <div className="grid md:grid-cols-2 gap-4 mb-6">
         <div className="p-5 rounded-2xl border border-gray-200 bg-white shadow-sm">
-          <h4 className="font-bold text-gray-800 mb-3">📈 Tes XP des 14 derniers jours</h4>
+          <h4 className="font-bold text-gray-800 mb-3">📈 Tes XP — 14 derniers jours</h4>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={chartData} margin={{ top: 5, right: 5, bottom: 0, left: -20 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
@@ -4194,30 +3204,16 @@ function Progres({ progress, setGoal }) {
               <span className="font-bold text-gray-900">{todayXp} / {progress.goal || 40} XP</span>
             </div>
             <div className="h-3 bg-gray-200 rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all ${todayXp >= (progress.goal || 40) ? "bg-green-500" : "bg-red-500"}`}
-                style={{ width: Math.min(100, (todayXp / (progress.goal || 40)) * 100) + "%" }}
-              />
+              <div className={`h-full rounded-full transition-all ${todayXp >= (progress.goal || 40) ? "bg-green-500" : "bg-red-500"}`} style={{ width: Math.min(100, (todayXp / (progress.goal || 40)) * 100) + "%" }} />
             </div>
-            {todayXp >= (progress.goal || 40) && <div className="text-green-600 text-xs font-bold mt-1">🎉 Objectif du jour atteint !</div>}
+            {todayXp >= (progress.goal || 40) && <div className="text-green-600 text-xs font-bold mt-1">🎉 Objectif atteint !</div>}
           </div>
           <div className="text-xs text-gray-500 mb-2">Choisis ton rythme :</div>
           <div className="flex gap-2">
             {[20, 40, 60, 100].map((g) => (
-              <button
-                key={g}
-                onClick={() => setGoal(g)}
-                className={`flex-1 py-2 rounded-xl text-sm font-bold border transition-all ${
-                  (progress.goal || 40) === g ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300 hover:border-red-400"
-                }`}
-              >
-                {g} XP
-              </button>
+              <button key={g} onClick={() => setGoal(g)} className={`flex-1 py-2 rounded-xl text-sm font-bold border transition-all ${(progress.goal || 40) === g ? "bg-red-600 text-white border-red-600" : "bg-white text-gray-700 border-gray-300 hover:border-red-400"}`}>{g} XP</button>
             ))}
           </div>
-          <p className="text-[11px] text-gray-400 mt-3">
-            ≈ 20 XP = 2 étapes légères · 40 XP = une bonne séance · 60-100 XP = grand entraînement. Un jour manqué remet la série 🔥 à zéro !
-          </p>
         </div>
       </div>
 
@@ -4230,9 +3226,7 @@ function Progres({ progress, setGoal }) {
             const pct = Math.round((done / nodes.length) * 100);
             return (
               <div key={l.id} className="flex items-center gap-3">
-                <span className="text-sm font-medium text-gray-700 w-28 truncate">
-                  {l.titre} · {l.zh}
-                </span>
+                <span className="text-sm font-medium text-gray-700 w-28 truncate">{l.titre} · {l.zh}</span>
                 <div className="flex-1 h-3 bg-gray-200 rounded-full overflow-hidden">
                   <div className={`h-full rounded-full transition-all ${pct === 100 ? "bg-green-500" : "bg-red-500"}`} style={{ width: pct + "%" }} />
                 </div>
@@ -4249,12 +3243,7 @@ function Progres({ progress, setGoal }) {
           {BADGES.map((b) => {
             const earned = b.test(progress);
             return (
-              <div
-                key={b.id}
-                className={`p-3 rounded-xl border text-center transition-all ${
-                  earned ? "bg-amber-50 border-amber-300 shadow" : "bg-gray-50 border-gray-200 opacity-60"
-                }`}
-              >
+              <div key={b.id} className={`p-3 rounded-xl border text-center transition-all ${earned ? "bg-amber-50 border-amber-300 shadow" : "bg-gray-50 border-gray-200 opacity-60"}`}>
                 <div className={`text-2xl mb-1 ${earned ? "" : "grayscale"}`}>{b.icon}</div>
                 <div className={`text-xs font-bold ${earned ? "text-amber-800" : "text-gray-400"}`}>{b.label}</div>
                 {earned && <div className="text-[10px] text-green-600 font-bold">obtenu ✓</div>}
@@ -4266,8 +3255,6 @@ function Progres({ progress, setGoal }) {
     </div>
   );
 }
-
-// ============================== APP ==============================
 
 export default function App() {
   useEffect(() => { preloadVoices(); }, []);
@@ -4290,16 +3277,8 @@ export default function App() {
     else if (node.type === "boss") setView("boss");
   };
 
-  const exitNode = () => {
-    setNodeId(null);
-    setNodeLesson(null);
-    setView("parcours");
-  };
-
-  const handleNodeDone = (pct) => {
-    if (activeNode) completeNode(activeNode.id, pct);
-    exitNode();
-  };
+  const exitNode = () => { setNodeId(null); setNodeLesson(null); setView("parcours"); };
+  const handleNodeDone = (pct) => { if (activeNode) completeNode(activeNode.id, pct); exitNode(); };
 
   const unlockedLessons = useMemo(() => {
     const arr = [1];
@@ -4319,16 +3298,12 @@ export default function App() {
             <span className="mr-2">{activeNode.icon}</span>
             <b>{activeNode.label}</b> · Leçon {activeNode.lesson} <span className="opacity-60">(+{activeNode.xp} XP)</span>
           </div>
-          <button onClick={exitNode} className="text-xs px-3 py-1 rounded-full bg-white/15 hover:bg-white/25">
-            ✕ Quitter
-          </button>
+          <button onClick={exitNode} className="text-xs px-3 py-1 rounded-full bg-white/15 hover:bg-white/25">✕ Quitter</button>
         </div>
       )}
 
       {view === "parcours" && <Parcours progress={progress} onLaunch={launch} />}
-      {view === "fiches" && (
-        <Fiches presetLesson={activeNode ? nodeLesson : null} onReviewDone={activeNode ? handleNodeDone : undefined} />
-      )}
+      {view === "fiches" && <Fiches presetLesson={activeNode ? nodeLesson : null} onReviewDone={activeNode ? handleNodeDone : undefined} />}
       {view === "quiz" && <Quiz presetLesson={activeNode ? nodeLesson : null} onDone={activeNode ? handleNodeDone : undefined} />}
       {view === "oral" && <Oral presetLesson={activeNode ? nodeLesson : null} onDone={activeNode ? handleNodeDone : undefined} />}
       {view === "tons" && (
@@ -4350,12 +3325,8 @@ export default function App() {
       {view === "admin" && <Admin progress={progress} setDonor={setDonor} setGoal={setGoal} addXp={addXp} />}
 
       <div className="mt-8 text-center text-xs text-gray-400">
-        <div>
-          加油！Jiāyóu ! — Propulsé par <b>Kimatey Enterprise</b> · 15% reversés au programme <b>Sauvons Nos Vies</b> de la VIE Foundation ❤️
-        </div>
-        <button onClick={() => setView("admin")} className="mt-2 px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-100">
-          ⚙️ Espace admin
-        </button>
+        <div>加油！Jiāyóu ! — Propulsé par <b>Kimatey Enterprise</b> · 15% reversés à la VIE Foundation ❤️</div>
+        <button onClick={() => setView("admin")} className="mt-2 px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-100">⚙️ Espace admin</button>
       </div>
     </div>
   );
