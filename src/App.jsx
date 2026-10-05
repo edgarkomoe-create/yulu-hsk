@@ -734,7 +734,7 @@ function getPronHist() {
 }
 async function askGeminiJSON(prompt, apiKey) {
   const res = await fetch(
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" +
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" +
       encodeURIComponent(apiKey),
     {
       method: "POST",
@@ -3134,7 +3134,7 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
           parts: [{ text: m.text }],
         }));
         const res = await fetch(
-          "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" +
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=" +
             encodeURIComponent(key.trim()),
           {
             method: "POST",
