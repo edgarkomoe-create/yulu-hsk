@@ -3,6 +3,16 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import Studio from "./Studio.jsx";
 import Landing from "./Landing.jsx";
 import Onboarding from "./Onboarding.jsx";
+import AuthScreen from "./AuthScreen.jsx";
+import AdminPanel from "./AdminPanel.jsx";
+import {
+  supabase,
+  getCurrentUser,
+  signOut,
+  syncProgressToCloud,
+  loadProgressFromCloud,
+  saveDonationToCloud,
+} from "./supabase.js";
 
 // ============================== FALLBACK GEMINI AUTOMATIQUE ==============================
 const GEMINI_MODELS = [
@@ -479,6 +489,7 @@ const LESSONS = [
   },
 ];
 
+// ============================== QUIZ ==============================
 const QUIZ = [
   { lesson: 1, type: "Traduction", question: "Comment dit-on « Bonjour » en chinois ?", options: ["你好 nǐ hǎo", "谢谢 xièxie", "再见 zàijiàn", "对不起 duìbuqǐ"], answer: 0, explication: "你好 nǐ hǎo = littéralement « toi bien »." },
   { lesson: 1, type: "Vocabulaire", question: "Que signifie 爸爸 bàba ?", options: ["père", "mère", "grand frère", "grand-père"], answer: 0 },
@@ -490,11 +501,10 @@ const QUIZ = [
   { lesson: 1, type: "Nombres", question: "零 líng = ?", options: ["0", "1", "10", "7"], answer: 0 },
   { lesson: 1, type: "Politesse", question: "On répond « ce n'est pas grave » à « désolé » par…", options: ["没关系 méiguānxi", "不客气 búkèqi", "你好 nǐ hǎo", "再见 zàijiàn"], answer: 0 },
   { lesson: 1, type: "Pinyin", question: "Comment dit-on « Bonjour professeur » ?", options: ["老师好 lǎoshī hǎo", "同学们好 tóngxuémen hǎo", "您好 nín hǎo", "你们好 nǐmen hǎo"], answer: 0 },
-  { lesson: 1, type: "Tons", question: "Combien de tons de base existe-t-il en mandarin ?", options: ["4 (+ le ton neutre)", "3", "5 seulement", "2"], answer: 0, explication: "ā á ǎ à + le ton neutre (non marqué)." },
-  { lesson: 1, type: "Tons", question: "nǐ hǎo s'écrit avec deux 3e tons. Comment le prononce-t-on ?", options: ["ní hǎo (2e ton + 3e ton)", "nì hào", "nī hǎo", "on ne change rien, c'est impossible à dire"], answer: 0, explication: "Règle : 3e ton + 3e ton → 2e ton + 3e ton à l'oral." },
-  { lesson: 1, type: "Pinyin", question: "Dans la syllabe 好 hǎo, quelle est la finale ?", options: ["ao", "h", "a", "o + h"], answer: 0, explication: "h = initiale, ao = finale, ˇ = ton." },
+  { lesson: 1, type: "Tons", question: "Combien de tons de base existe-t-il en mandarin ?", options: ["4 (+ le ton neutre)", "3", "5 seulement", "2"], answer: 0 },
+  { lesson: 1, type: "Tons", question: "nǐ hǎo s'écrit avec deux 3e tons. Comment le prononce-t-on ?", options: ["ní hǎo (2e ton + 3e ton)", "nì hào", "nī hǎo", "on ne change rien"], answer: 0 },
+  { lesson: 1, type: "Pinyin", question: "Dans la syllabe 好 hǎo, quelle est la finale ?", options: ["ao", "h", "a", "o + h"], answer: 0 },
   { lesson: 1, type: "Vocabulaire", question: "« Et toi ? » se dit…", options: ["你呢？ nǐ ne?", "你好 nǐ hǎo", "什么 shénme", "再见 zàijiàn"], answer: 0 },
-
   { lesson: 2, type: "Politesse", question: "Que répond-on à 谢谢 xièxie (merci) ?", options: ["不客气 bú kèqi", "没关系 méiguānxi", "你好 nǐ hǎo", "对不起 duìbuqǐ"], answer: 0 },
   { lesson: 2, type: "Vocabulaire", question: "再见 zàijiàn signifie…", options: ["au revoir", "à demain", "merci", "bonjour"], answer: 0 },
   { lesson: 2, type: "Vocabulaire", question: "« À demain » se dit…", options: ["明天见 míngtiān jiàn", "星期一见 xīngqī yī jiàn", "再见 zàijiàn", "今天见 jīntiān jiàn"], answer: 0 },
@@ -503,56 +513,52 @@ const QUIZ = [
   { lesson: 2, type: "Nombres", question: "Comment dit-on 11 ?", options: ["十一 shíyī", "二十 èrshí", "九 jiǔ", "十二 shí'èr"], answer: 0 },
   { lesson: 2, type: "Nombres", question: "三十 sānshí = ?", options: ["30", "13", "33", "300"], answer: 0 },
   { lesson: 2, type: "Questions", question: "« Qu'est-ce que c'est ? » se dit…", options: ["这是什么？ Zhè shì shénme?", "你是谁？ Nǐ shì shéi?", "怎么读？ Zěnme dú?", "你好吗？ Nǐ hǎo ma?"], answer: 0 },
-  { lesson: 2, type: "Nationalité", question: "« Je suis ivoirien » se dit…", options: ["我是科特迪瓦人。Wǒ shì Kētèdíwǎ rén.", "我是中国人。Wǒ shì Zhōngguó rén.", "我叫科特迪瓦。Wǒ jiào Kētèdíwǎ.", "我是汉语。Wǒ shì Hànyǔ."], answer: 0 },
-  { lesson: 2, type: "Pinyin", question: "Quelle est l'abréviation correcte de iou ?", options: ["iu (ex. niú)", "ui", "un", "iou reste entier"], answer: 0, explication: "iou→iu, uei→ui, uen→un devant une initiale." },
-  { lesson: 2, type: "Pinyin", question: "Sur quelle voyelle se marque le ton dans shuǐ (eau) ?", options: ["u (car uei → ui)", "i", "e", "sur les deux"], answer: 0, explication: "ui = abréviation de uei, donc le ton va sur le u." },
+  { lesson: 2, type: "Nationalité", question: "« Je suis ivoirien » se dit…", options: ["我是科特迪瓦人。", "我是中国人。", "我叫科特迪瓦。", "我是汉语。"], answer: 0 },
+  { lesson: 2, type: "Pinyin", question: "Quelle est l'abréviation correcte de iou ?", options: ["iu (ex. niú)", "ui", "un", "iou reste entier"], answer: 0 },
+  { lesson: 2, type: "Pinyin", question: "Sur quelle voyelle se marque le ton dans shuǐ (eau) ?", options: ["u (car uei → ui)", "i", "e", "sur les deux"], answer: 0 },
   { lesson: 2, type: "Tons", question: "Devant un 4e ton, 不 bù se prononce…", options: ["bú (2e ton), ex. bú shì", "bǔ (3e ton)", "bū (1er ton)", "il ne change jamais"], answer: 0 },
   { lesson: 2, type: "Tons", question: "Lequel de ces mots a un ton neutre (non marqué) ?", options: ["妈妈 māma", "咖啡 kāfēi", "你好 nǐ hǎo", "水 shuǐ"], answer: 0 },
   { lesson: 2, type: "Vocabulaire", question: "学生 xuésheng = ?", options: ["étudiant(e)", "professeur", "école", "camarade"], answer: 0 },
-
-  { lesson: 3, type: "Grammaire", question: "Comment demande-t-on le nom de quelqu'un ?", options: ["你叫什么名字？ Nǐ jiào shénme míngzi?", "你是谁？ Nǐ shì shéi?", "你姓什么？ Nǐ xìng shénme?", "这是什么？ Zhè shì shénme?"], answer: 0 },
-  { lesson: 3, type: "Grammaire", question: "« Je m'appelle Edgar » se dit…", options: ["我叫 Edgar。Wǒ jiào Edgar.", "我是 Edgar。Wǒ shì Edgar.", "我的 Edgar。Wǒ de Edgar.", " Edgar 叫我。Edgar jiào wǒ."], answer: 0 },
+  { lesson: 3, type: "Grammaire", question: "Comment demande-t-on le nom de quelqu'un ?", options: ["你叫什么名字？", "你是谁？", "你姓什么？", "这是什么？"], answer: 0 },
+  { lesson: 3, type: "Grammaire", question: "« Je m'appelle Edgar » se dit…", options: ["我叫 Edgar。", "我是 Edgar。", "我的 Edgar。", "Edgar 叫我。"], answer: 0 },
   { lesson: 3, type: "Grammaire", question: "Quelle est la structure de base d'une phrase chinoise ?", options: ["Sujet + Verbe + Objet", "Verbe + Sujet + Objet", "Sujet + Objet + Verbe", "peu importe"], answer: 0 },
   { lesson: 3, type: "Politesse", question: "您贵姓？ Nín guìxìng? est une façon…", options: ["très polie de demander le nom de famille", "de dire au revoir", "de remercier", "de s'excuser"], answer: 0 },
   { lesson: 3, type: "Pinyin", question: "Après j, q, x, le ü s'écrit…", options: ["sans tréma : ju, qu, xu", "toujours avec tréma", "avec un w", "il n'existe pas"], answer: 0 },
   { lesson: 3, type: "Pinyin", question: "Dans nǚ (féminin), le tréma est-il conservé après n ?", options: ["Oui, on garde le tréma après n et l", "Non, on l'enlève", "Oui mais seulement après l", "Le mot n'existe pas"], answer: 0 },
   { lesson: 3, type: "Vocabulaire", question: "名字 míngzi = ?", options: ["nom", "nom de famille", "prénom seulement", "nationalité"], answer: 0 },
-  { lesson: 3, type: "Vocabulaire", question: "Quelle paire correspond à « non aspiré / aspiré » ?", options: ["b / p", "p / b", "m / n", "j / zh"], answer: 0, explication: "b p, d t, g k, j q, z c, zh ch : 1er non aspiré, 2e aspiré." },
+  { lesson: 3, type: "Vocabulaire", question: "Quelle paire correspond à « non aspiré / aspiré » ?", options: ["b / p", "p / b", "m / n", "j / zh"], answer: 0 },
   { lesson: 3, type: "Grammaire", question: "笔 bǐ est…", options: ["un stylo", "un livre", "un tableau", "une chaise"], answer: 0 },
   { lesson: 3, type: "Tons", question: "汉语书 Hànyǔ shū signifie…", options: ["livre de chinois", "professeur de chinois", "langue chinoise", "école chinoise"], answer: 0 },
-
-  { lesson: 4, type: "Grammaire", question: "Où se place 的 de dans une phrase possessive ?", options: ["Entre le possesseur et le possédé", "À la fin de la phrase", "Devant le possesseur", "N'importe où"], answer: 0, explication: "我 + 的 + 书 = mon livre." },
-  { lesson: 4, type: "Grammaire", question: "« mon professeur de chinois » se dit…", options: ["我的汉语老师 wǒ de hànyǔ lǎoshī", "我老师汉语 wǒ lǎoshī hànyǔ", "汉语我的老师 hànyǔ wǒ de lǎoshī", "老师我的汉语 lǎoshī wǒ de hànyǔ"], answer: 0 },
-  { lesson: 4, type: "Grammaire", question: "Comment dit-on « Qui est-il ? »", options: ["他是谁？ Tā shì shéi?", "谁是他？ Shéi shì tā?", "他是哪？ Tā shì nǎ?", "他什么？ Tā shénme?"], answer: 0 },
-  { lesson: 4, type: "Grammaire", question: "« Qui est Li Yue ? » (accent sur l'identité) se dit…", options: ["谁是李月？ Shéi shì Lǐ Yuè?", "李月是谁？ Lǐ Yuè shì shéi?", "李月什么？ Lǐ Yuè shénme?", "谁是名字？ Shéi shì míngzi?"], answer: 0, explication: "Structure 2 : 谁 + Verbe + Objet ?" },
-  { lesson: 4, type: "Grammaire", question: "« mon camarade de classe » se dit…", options: ["我同学 wǒ tóngxué (sans 的)", "我的同学 wǒ de tóngxué est obligatoire", "同学我 tóngxué wǒ", "的同学 wǒ de"], answer: 0, explication: "Exception : avec les relations proches (同学, 朋友), 的 peut être omis." },
+  { lesson: 4, type: "Grammaire", question: "Où se place 的 de dans une phrase possessive ?", options: ["Entre le possesseur et le possédé", "À la fin de la phrase", "Devant le possesseur", "N'importe où"], answer: 0 },
+  { lesson: 4, type: "Grammaire", question: "« mon professeur de chinois » se dit…", options: ["我的汉语老师", "我老师汉语", "汉语我的老师", "老师我的汉语"], answer: 0 },
+  { lesson: 4, type: "Grammaire", question: "Comment dit-on « Qui est-il ? »", options: ["他是谁？", "谁是他？", "他是哪？", "他什么？"], answer: 0 },
+  { lesson: 4, type: "Grammaire", question: "« Qui est Li Yue ? » (accent sur l'identité) se dit…", options: ["谁是李月？", "李月是谁？", "李月什么？", "谁是名字？"], answer: 0 },
+  { lesson: 4, type: "Grammaire", question: "« mon camarade de classe » se dit…", options: ["我同学 (sans 的)", "我的同学 obligatoire", "同学我", "的同学"], answer: 0 },
   { lesson: 4, type: "Vocabulaire", question: "汉语 Hànyǔ = ?", options: ["la langue chinoise", "un professeur chinois", "la Chine", "un livre"], answer: 0 },
   { lesson: 4, type: "Vocabulaire", question: "哪 nǎ sert à…", options: ["poser une question de choix (« quel »)", "demander l'identité (« qui »)", "demander une chose (« quoi »)", "saluer"], answer: 0 },
   { lesson: 4, type: "Pinyin", question: "Comment s'écrit la syllabe ü quand elle est seule ?", options: ["yu", "u", "ü reste ü", "wu"], answer: 0 },
   { lesson: 4, type: "Pinyin", question: "ue → s'écrit…", options: ["we (ex. wen)", "ue reste ue", "ve", "uei"], answer: 0 },
   { lesson: 4, type: "Vocabulaire", question: "美国 Měiguó = ?", options: ["États-Unis", "Chine", "Japon", "Corée du Sud"], answer: 0 },
-  { lesson: 4, type: "Grammaire", question: "Comment rend-on « Es-tu étudiant ? » ?", options: ["你是学生吗？ Nǐ shì xuésheng ma?", "你是学生？没有。", "你是学生什么？", "学生是你吗？"], answer: 0 },
+  { lesson: 4, type: "Grammaire", question: "Comment rend-on « Es-tu étudiant ? » ?", options: ["你是学生吗？", "你是学生？没有。", "你是学生什么？", "学生是你吗？"], answer: 0 },
   { lesson: 4, type: "Caractères", question: "月 représente…", options: ["la lune", "le cœur", "la porte", "le milieu"], answer: 0 },
-  { lesson: 4, type: "Caractères", question: "Quel caractère utilise le trait 卧钩 wògōu (crochet couché) ?", options: ["心 xīn (cœur)", "山 shān (montagne)", "口 kǒu (bouche)", "十 shí (dix)"], answer: 0 },
-
-  { lesson: 4, type: "Politesse", question: "请问 qǐngwèn signifie…", options: ["excusez-moi / s'il vous plaît (très poli)", "au revoir", "merci", "je ne sais pas"], answer: 0 },
-  { lesson: 4, type: "Grammaire", question: "« De quelle nationalité es-tu ? » se dit…", options: ["你是哪国人？ Nǐ shì nǎ guó rén?", "你是谁？ Nǐ shì shéi?", "你叫什么名字？ Nǐ jiào shénme míngzi?", "你有几个老师？ Nǐ yǒu jǐ gè lǎoshī?"], answer: 0 },
+  { lesson: 4, type: "Caractères", question: "Quel caractère utilise le trait 卧钩 wògōu ?", options: ["心 xīn (cœur)", "山 shān (montagne)", "口 kǒu (bouche)", "十 shí (dix)"], answer: 0 },
+  { lesson: 4, type: "Politesse", question: "请问 qǐngwèn signifie…", options: ["excusez-moi / s'il vous plaît", "au revoir", "merci", "je ne sais pas"], answer: 0 },
+  { lesson: 4, type: "Grammaire", question: "« De quelle nationalité es-tu ? » se dit…", options: ["你是哪国人？", "你是谁？", "你叫什么名字？", "你有几个老师？"], answer: 0 },
   { lesson: 4, type: "Vocabulaire", question: "法国 Fǎguó = ?", options: ["France", "Royaume-Uni", "Allemagne", "Thaïlande"], answer: 0 },
   { lesson: 4, type: "Vocabulaire", question: "英国 Yīngguó = ?", options: ["Royaume-Uni", "États-Unis", "Japon", "Corée du Sud"], answer: 0 },
   { lesson: 4, type: "Vocabulaire", question: "男朋友 nán péngyou = ?", options: ["petit ami", "ami", "petite amie", "camarade"], answer: 0 },
   { lesson: 4, type: "Vocabulaire", question: "手机 shǒujī = ?", options: ["téléphone", "stylo", "cahier", "livre"], answer: 0 },
-  { lesson: 4, type: "Grammaire", question: "Où se place 也 yě (aussi) dans la phrase ?", options: ["Devant le verbe : Tā yě shì...", "Après le verbe : Tā shì yě...", "En début de phrase uniquement", "N'importe où"], answer: 0 },
-  { lesson: 4, type: "Grammaire", question: "« À qui est ce livre ? » se dit…", options: ["这是谁的书？ Zhè shì shéi de shū?", "这是什么书？ Zhè shì shénme shū?", "谁的这是书？ Shéi de zhè shì shū?", "这是几本书？ Zhè shì jǐ běn shū?"], answer: 0 },
+  { lesson: 4, type: "Grammaire", question: "Où se place 也 yě (aussi) ?", options: ["Devant le verbe", "Après le verbe", "En début de phrase", "N'importe où"], answer: 0 },
+  { lesson: 4, type: "Grammaire", question: "« À qui est ce livre ? » se dit…", options: ["这是谁的书？", "这是什么书？", "谁的这是书？", "这是几本书？"], answer: 0 },
   { lesson: 4, type: "Politesse", question: "很高兴认识你 ！ signifie…", options: ["Ravi de faire ta connaissance !", "Au revoir, à demain !", "Excuse-moi !", "Merci beaucoup !"], answer: 0 },
   { lesson: 4, type: "Grammaire", question: "Devant un proche (妈妈， 同学， 朋友)， la particule 的…", options: ["peut être omise : 我妈妈", "est obligatoire", "se met devant le possesseur", "devient 得"], answer: 0 },
-
   { lesson: 5, type: "Vocabulaire", question: "家 jiā signifie…", options: ["famille ; maison", "argent", "école", "enfant"], answer: 0 },
-  { lesson: 5, type: "Grammaire", question: "« J'ai un grand frère » se dit…", options: ["我有哥哥。Wǒ yǒu gēge.", "我是哥哥。Wǒ shì gēge.", "我叫哥哥。Wǒ jiào gēge.", "我的哥哥。Wǒ de gēge."], answer: 0 },
+  { lesson: 5, type: "Grammaire", question: "« J'ai un grand frère » se dit…", options: ["我有哥哥。", "我是哥哥。", "我叫哥哥。", "我的哥哥。"], answer: 0 },
   { lesson: 5, type: "Grammaire", question: "Comment nie-t-on 有 yǒu (avoir) ?", options: ["没有 méiyǒu", "不有 bù yǒu", "是有 shì yǒu", "没是 méi shì"], answer: 0 },
-  { lesson: 5, type: "Grammaire", question: "Quel classificateur compte les personnes de la famille ?", options: ["口 kǒu", "个 gè", "本 běn", "岁 suì"], answer: 0, explication: "三口人 = trois personnes de la famille · 个 gè = personnes en général · 本 běn = livres." },
+  { lesson: 5, type: "Grammaire", question: "Quel classificateur compte les personnes de la famille ?", options: ["口 kǒu", "个 gè", "本 běn", "岁 suì"], answer: 0 },
   { lesson: 5, type: "Grammaire", question: "Quel classificateur convient pour les livres ?", options: ["本 běn", "口 kǒu", "个 gè", "都一样"], answer: 0 },
-  { lesson: 5, type: "Grammaire", question: "« deux enfants » se dit…", options: ["两个孩子 liǎng gè háizi", "二孩子 èr háizi", "两个口 liǎng kǒu", "二个孩子 èr gè háizi"], answer: 0, explication: "两 liǎng = quantité · 二 èr = compter (2, 12, 22…)." },
-  { lesson: 5, type: "Grammaire", question: "« Combien y a-t-il de personnes dans ta famille ? » se dit…", options: ["你家有几口人？ Nǐ jiā yǒu jǐ kǒu rén?", "你家有几个人？", "你是什么家？ Nǐ shì shénme jiā?", "你家是谁？ Nǐ jiā shì shéi?"], answer: 0 },
+  { lesson: 5, type: "Grammaire", question: "« deux enfants » se dit…", options: ["两个孩子", "二孩子", "两个口", "二个孩子"], answer: 0 },
+  { lesson: 5, type: "Grammaire", question: "« Combien y a-t-il de personnes dans ta famille ? » se dit…", options: ["你家有几口人？", "你家有几个人？", "你是什么家？", "你家是谁？"], answer: 0 },
   { lesson: 5, type: "Vocabulaire", question: "几 jǐ sert à demander…", options: ["une quantité de 0 à 10", "l'identité d'une personne", "un prix en argent", "l'heure"], answer: 0 },
   { lesson: 5, type: "Vocabulaire", question: "女儿 nǚ'ér = ?", options: ["fille", "fils", "mère", "enfant"], answer: 0 },
   { lesson: 5, type: "Vocabulaire", question: "二十岁 èrshí suì = ?", options: ["vingt ans", "vingt personnes", "vingt livres", "vingt euros"], answer: 0 },
@@ -561,6 +567,7 @@ const QUIZ = [
   { lesson: 5, type: "Nombres", question: "九十九 = ?", options: ["99", "89", "999", "19"], answer: 0 },
 ];
 
+// ============================== DIALOGUES ==============================
 const DIALOGUES = {
   1: [
     ["A", "你好！", "Nǐ hǎo!", "Bonjour !"],
@@ -841,6 +848,18 @@ function useProgress() {
     return { xp: 0, history: {}, nodes: {}, goal: 40, coins: 0, pot: 0, donor: false };
   });
 
+  // Écoute l'event de chargement cloud
+  useEffect(() => {
+    const handler = () => {
+      try {
+        const raw = localStorage.getItem(STORE_KEY);
+        if (raw) setProgress(JSON.parse(raw));
+      } catch (e) {}
+    };
+    window.addEventListener("hsk1-cloud-loaded", handler);
+    return () => window.removeEventListener("hsk1-cloud-loaded", handler);
+  }, []);
+
   useEffect(() => {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(progress)); } catch (e) {}
   }, [progress]);
@@ -1058,7 +1077,7 @@ const NAV = [
   ["don", "❤️ Fondation"],
 ];
 
-function Header({ active, onNav, progress, onHome }) {
+function Header({ active, onNav, progress, onHome, cloudUser, onLogout }) {
   const level = Math.floor(progress.xp / 100) + 1;
   const into = progress.xp % 100;
   const streak = computeStreak(progress.history);
@@ -1079,6 +1098,22 @@ function Header({ active, onNav, progress, onHome }) {
           <p className="text-xs md:text-sm text-gray-500">Chaque mot compte · chaque vie mérite un futur ❤️ VIE Foundation</p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Indicateur cloud */}
+          {cloudUser ? (
+            <button
+              onClick={onLogout}
+              className="px-3 py-1.5 rounded-xl bg-green-50 border border-green-300 text-center hover:bg-green-100 transition-colors"
+              title={`Connecté : ${cloudUser.email}`}
+            >
+              <div className="text-sm font-bold text-green-600">☁️</div>
+              <div className="text-[10px] text-green-700">sync</div>
+            </button>
+          ) : (
+            <div className="px-3 py-1.5 rounded-xl bg-gray-50 border border-gray-200 text-center" title="Non connecté — progression locale">
+              <div className="text-sm font-bold text-gray-400">☁️</div>
+              <div className="text-[10px] text-gray-400">local</div>
+            </div>
+          )}
           <div className="px-3 py-1.5 rounded-xl bg-orange-50 border border-orange-200 text-center">
             <div className="text-sm font-bold text-orange-600">🔥 {streak}</div>
             <div className="text-[10px] text-orange-500">jours</div>
@@ -2516,22 +2551,58 @@ function Don({ progress, setDonor, addDonation, donateCoins }) {
   const freeQuota = getSettings().aiFreePerDay || FREE_AI_PER_DAY;
   const setF = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
-  const submit = () => {
-    if (!form.ref.trim() || !form.nom.trim() || !form.wave.trim() || !form.montant.trim()) { setErr("Remplis tous les champs (WhatsApp optionnel)."); return; }
+  const submit = async () => {
+    if (!form.ref.trim() || !form.nom.trim() || !form.wave.trim() || !form.montant.trim()) {
+      setErr("Remplis tous les champs (WhatsApp optionnel).");
+      return;
+    }
     if (!(Number(form.montant) > 0)) { setErr("Le montant doit être positif."); return; }
     setErr("");
-    addDonation({ ref: form.ref.trim(), nom: form.nom.trim(), wave: form.wave.trim(), whatsapp: form.whatsapp.trim(), montant: Number(form.montant), date: todayKey(), statut: "en attente de vérification" });
+    const donation = {
+      transaction_ref: form.ref.trim(),
+      full_name: form.nom.trim(),
+      wave_number: form.wave.trim(),
+      whatsapp: form.whatsapp.trim(),
+      amount_fcfa: Number(form.montant),
+      status: "pending",
+    };
+    // Enregistrement local
+    addDonation({
+      ref: form.ref.trim(),
+      nom: form.nom.trim(),
+      wave: form.wave.trim(),
+      whatsapp: form.whatsapp.trim(),
+      montant: Number(form.montant),
+      date: todayKey(),
+      statut: "en attente de vérification",
+    });
+    // Enregistrement cloud
+    const res = await saveDonationToCloud(donation);
+    if (!res.ok) console.warn("Don non envoyé au cloud :", res.error);
     setDonor(true);
     setSent(true);
   };
 
   return (
     <div className="space-y-4">
-      <div className="p-6 rounded-2xl bg-gradient-to-r from-rose-600 via-red-500 to-orange-500 text-white shadow">
-        <div className="text-xs font-bold tracking-widest opacity-80 mb-1">🌍 VIE FOUNDATION</div>
-        <h3 className="text-xl md:text-2xl font-bold mb-2">❤️ Sauvons Nos Vies</h3>
-        <p className="text-sm opacity-90 mb-3 italic">« Chaque action compte. Chaque vie mérite un futur. »</p>
-        <p className="text-sm opacity-90">YǔLù 语路 est <b>gratuit</b>. 15% reversés à <b>Sauvons Nos Vies</b>.</p>
+      <div className="p-6 rounded-2xl bg-gradient-to-r from-rose-600 via-red-500 to-orange-500 text-white shadow relative overflow-hidden">
+        <div className="flex flex-col md:flex-row items-center gap-4">
+          <img
+            src="/vie-foundation-logo.png"
+            alt="VIE Foundation"
+            className="w-24 h-24 md:w-32 md:h-32 object-contain rounded-full shadow-2xl shrink-0 bg-white p-1"
+            onError={(e) => { e.target.style.display = "none"; }}
+          />
+          <div className="flex-1">
+            <div className="text-xs font-bold tracking-widest opacity-80 mb-1">🌍 VIE FOUNDATION</div>
+            <h3 className="text-xl md:text-2xl font-bold mb-2">❤️ Sauvons Nos Vies</h3>
+            <p className="text-sm opacity-90 mb-3 italic">« Chaque action compte. Chaque vie mérite un futur. »</p>
+            <p className="text-sm opacity-90">
+              YǔLù 语路 est <b>gratuit</b>. Propulsé par <b>Kimatey Enterprise</b>, l'app reverse
+              <b> 15% de son chiffre d'affaires</b> au programme <b>Sauvons Nos Vies</b>. Ton don amplifie cette force collective.
+            </p>
+          </div>
+        </div>
       </div>
       <div className="p-5 rounded-2xl border border-rose-200 bg-white shadow-sm">
         <h4 className="font-bold text-gray-900 mb-3">🌟 Premium donateur</h4>
@@ -2539,6 +2610,7 @@ function Don({ progress, setDonor, addDonation, donateCoins }) {
           <li>🧑‍🏫 Professeur IA <b>illimité</b> (au lieu de {freeQuota}/jour)</li>
           <li>❤️ Avatar exclusif « Donateur »</li>
           <li>🏆 Badge « Donateur · Fondation »</li>
+          <li>☁️ Sauvegarde cloud de ta progression</li>
         </ul>
         <div className="p-4 rounded-xl border-2 border-cyan-300 bg-cyan-50 mb-4">
           <div className="flex items-center gap-2 mb-2"><span className="text-2xl">🌊</span><b>Étape 1 — Fais ton don avec Wave</b></div>
@@ -2993,7 +3065,79 @@ export default function App() {
   useEffect(() => { preloadVoices(); }, []);
 
   const { progress, addXp, completeNode, setGoal, addCoins, donateCoins, spendCoins, buyAvatar, setDonor, addDonation, registerAI, aiUsedToday } = useProgress();
-  const [appMode, setAppMode] = useState(() => {
+
+  // ============================== CLOUD SYNC ==============================
+  const [cloudUser, setCloudUser] = useState(null);
+  const [cloudReady, setCloudReady] = useState(false);
+  const lastSyncRef = useRef(0);
+
+  useEffect(() => {
+    if (!supabase) {
+      setCloudReady(true);
+      return;
+    }
+    (async () => {
+      const u = await getCurrentUser();
+      setCloudUser(u);
+      setCloudReady(true);
+    })();
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCloudUser(session?.user || null);
+    });
+    return () => listener?.subscription?.unsubscribe?.();
+  }, []);
+
+  const [hasLoadedCloud, setHasLoadedCloud] = useState(false);
+  useEffect(() => {
+    if (!cloudUser || hasLoadedCloud) return;
+    (async () => {
+      const cloudData = await loadProgressFromCloud(cloudUser.id);
+      if (cloudData) {
+        console.log("☁️ Progression chargée depuis le cloud");
+        try {
+          const raw = localStorage.getItem(STORE_KEY);
+          const local = raw ? JSON.parse(raw) : {};
+          const merged = {
+            ...local,
+            ...cloudData,
+            xp: Math.max(local.xp || 0, cloudData.xp || 0),
+            coins: Math.max(local.coins || 0, cloudData.coins || 0),
+            pot: Math.max(local.pot || 0, cloudData.pot || 0),
+            nodes: { ...(cloudData.nodes || {}), ...(local.nodes || {}) },
+            history: { ...(cloudData.history || {}), ...(local.history || {}) },
+          };
+          localStorage.setItem(STORE_KEY, JSON.stringify(merged));
+          window.dispatchEvent(new Event("hsk1-cloud-loaded"));
+        } catch (e) {}
+      }
+      setHasLoadedCloud(true);
+    })();
+  }, [cloudUser, hasLoadedCloud]);
+
+  useEffect(() => {
+    if (!cloudUser || !progress) return;
+    const now = Date.now();
+    if (now - lastSyncRef.current < 5000) return;
+    lastSyncRef.current = now;
+    syncProgressToCloud(cloudUser.id, progress);
+  }, [progress, cloudUser]);
+
+  const handleLogout = async () => {
+    if (!window.confirm("Se déconnecter ? (ta progression est sauvegardée)")) return;
+    await signOut();
+    setCloudUser(null);
+    setHasLoadedCloud(false);
+  };
+
+  // ============================== ROUTER ==============================
+    const [appMode, setAppMode] = useState(() => {
+    // 🔒 Détection URL admin secrète
+    if (typeof window !== "undefined" && window.location.hash === "#studio-2026") {
+      return "admin";
+    }
+    if (typeof window !== "undefined" && window.location.hash.includes("access_token")) {
+      return "app";
+    }
     try {
       const raw = localStorage.getItem("hsk1-user-profile-v1");
       if (raw) {
@@ -3008,6 +3152,7 @@ export default function App() {
     } catch (e) {}
     return "landing";
   });
+
   const [view, setView] = useState("parcours");
   const [nodeId, setNodeId] = useState(null);
   const [nodeLesson, setNodeLesson] = useState(null);
@@ -3042,7 +3187,6 @@ export default function App() {
     }
   };
 
-  // ── Router Landing → Onboarding → App ──
   if (appMode === "landing") {
     return (
       <Landing
@@ -3055,7 +3199,28 @@ export default function App() {
   if (appMode === "onboarding") {
     return (
       <Onboarding
-        onComplete={() => setAppMode("app")}
+        onComplete={(nextMode) => {
+          if (nextMode === "auth") setAppMode("auth");
+          else setAppMode("app");
+        }}
+      />
+    );
+  }
+
+    // 🔒 ROUTE ADMIN SÉCURISÉE (URL secrète uniquement)
+  if (appMode === "admin") {
+    return (
+      <AdminPanel
+        progress={progress}
+        setDonor={setDonor}
+        setGoal={setGoal}
+        addXp={addXp}
+        onExit={() => {
+          if (typeof window !== "undefined") {
+            window.location.hash = "";
+          }
+          setAppMode("app");
+        }}
       />
     );
   }
@@ -3067,6 +3232,8 @@ export default function App() {
         onNav={(v) => { setNodeId(null); setNodeLesson(null); setView(v); }}
         onHome={goHome}
         progress={progress}
+        cloudUser={cloudUser}
+        onLogout={handleLogout}
       />
 
       {activeNode && (
@@ -3099,14 +3266,9 @@ export default function App() {
       {view === "prof" && <ProfIA progress={progress} aiUsedToday={aiUsedToday} registerAI={registerAI} />}
       {view === "don" && <Don progress={progress} setDonor={setDonor} addDonation={addDonation} donateCoins={donateCoins} />}
       {view === "pronon" && <Prononciation addXp={addXp} addCoins={addCoins} unlockedLessons={unlockedLessons} />}
-      {view === "admin" && <Admin progress={progress} setDonor={setDonor} setGoal={setGoal} addXp={addXp} />}
 
-      <div className="mt-8 text-center text-xs text-gray-400">
+            <div className="mt-8 text-center text-xs text-gray-400">
         <div>加油！Jiāyóu ! — Propulsé par <b>Kimatey Enterprise</b> · 15% reversés à la VIE Foundation ❤️</div>
-        <button onClick={() => setView("admin")} className="mt-2 px-3 py-1 rounded-full border border-gray-300 hover:bg-gray-100">⚙️ Espace admin</button>
-      </div>
-    </div>
+      </div>>
   );
 }
-
-
