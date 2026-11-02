@@ -20,11 +20,18 @@ insert into public.app_config (key, value) values
   ('ai_quotas', '{"free":5,"donor":999999,"boost_24h":50,"week_7d":200,"month_30d":999999,"quarter_90d":999999,"year_365d":999999,"lifetime":999999}'),
   ('pricing_passes', '{"boost_24h":500,"week_7d":1000,"month_30d":2500,"quarter_90d":6000,"year_365d":18000,"lifetime":35000}'),
   ('pricing_donations', '{"anonymous_min":50,"official_min":200}'),
-  ('revenue_split', '{"tech":70,"vie_foundation":10,"certifications":10,"data_bonuses":10}'),
+  ('revenue_split', '{"tech":65,"vie_foundation":15,"certifications":10,"data_bonuses":10}'),
   ('gemini_models', '{"orchestrator":"gemini-2.5-flash-lite","agent_default":"gemini-2.5-flash"}'),
   ('sandbox', '{"pass_percent":80,"max_attempts_per_day":20}'),
   ('payment', '{"wave_link":"https://pay.wave.com/m/M_ci_lPtTUkiLSpYn/c/ci/"}')
 on conflict (key) do nothing;
+
+-- Vision d'origine : 15 % du chiffre d'affaires pour Sauvons Nos Vies (VIE Foundation).
+-- Corrige une base où la migration aurait déjà été jouée avec l'ancienne répartition 70/10/10/10.
+update public.app_config
+  set value = '{"tech":65,"vie_foundation":15,"certifications":10,"data_bonuses":10}'::jsonb
+  where key = 'revenue_split'
+    and value = '{"tech":70,"vie_foundation":10,"certifications":10,"data_bonuses":10}'::jsonb;
 
 -- Filet de sécurité : si schema.sql n'a pas été exécuté, on crée les tables de base.
 create table if not exists public.profiles (
@@ -272,8 +279,8 @@ declare v jsonb;
 begin
   select coalesce((select value from public.app_config where key = 'revenue_split'), '{}'::jsonb) into v;
   return jsonb_build_object(
-    'tech',           round(p_amount * coalesce((v->>'tech')::numeric, 70) / 100),
-    'vie_foundation', round(p_amount * coalesce((v->>'vie_foundation')::numeric, 10) / 100),
+    'tech',           round(p_amount * coalesce((v->>'tech')::numeric, 65) / 100),
+    'vie_foundation', round(p_amount * coalesce((v->>'vie_foundation')::numeric, 15) / 100),
     'certifications', round(p_amount * coalesce((v->>'certifications')::numeric, 10) / 100),
     'data_bonuses',   round(p_amount * coalesce((v->>'data_bonuses')::numeric, 10) / 100));
 end $$;

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { getCommunityGoal } from "./lib/cloud.js";
 
 // ============================== ANIMATIONS CSS ==============================
 const GLOBAL_STYLES = `
@@ -118,24 +119,25 @@ const STEPS = [
   },
 ];
 
-const TESTIMONIALS = [
+// Ce que l'apprenant saura faire à la fin du parcours HSK 1 (promesses vérifiables, pas de faux avis).
+const GOALS = [
   {
-    quote: "Je pensais que le chinois était impossible. En 3 semaines avec YǔLù, je peux saluer, me présenter et commander un café. Le prof IA m'aide à 23h quand j'ai une question !",
-    name: "Awa K.",
-    role: "Étudiante en commerce · Abidjan",
-    avatar: "🌸",
+    icon: "👋",
+    title: "Saluer et te présenter",
+    desc: "你好, 我是… : dire bonjour, ton nom, ta nationalité, et demander comment va l'autre.",
+    zh: "你好！我是阿娃。",
   },
   {
-    quote: "La prononciation corrigée a tout changé pour moi. J'avais peur de mal parler devant les Chinois du marché de Treichville — maintenant je lance des 你好 avec confiance !",
-    name: "Yao D.",
-    role: "Commerçant · Yopougon",
-    avatar: "🦁",
+    icon: "🛍️",
+    title: "Te débrouiller au marché",
+    desc: "Compter, demander un prix et acheter : utile à Treichville comme à Guangzhou.",
+    zh: "这个多少钱？",
   },
   {
-    quote: "5 minutes dans le taxi, 5 minutes le soir. En 2 mois, j'ai fini HSK 1. Mes collègues chinois sont impressionnés. Et chaque pièce gagnée va à la cagnotte solidaire.",
-    name: "Fatou T.",
-    role: "Cadre bancaire · Plateau",
-    avatar: "🎓",
+    icon: "🎓",
+    title: "Viser le HSK 1",
+    desc: "Les 150 mots officiels, les 4 tons et les bases de la grammaire pour te présenter à l'examen.",
+    zh: "我学习汉语。",
   },
 ];
 
@@ -155,7 +157,7 @@ const DEMO_FEATURES = [
 // ============================== COMPOSANT PRINCIPAL ==============================
 export default function Landing({ onStart, progress }) {
   const [scrollY, setScrollY] = useState(0);
-  const [currentTestimonial, setCurrentTestimonial] = useState(0);
+  const [communityGoal, setCommunityGoal] = useState(null);
   const [demoStep, setDemoStep] = useState(0);
 
   useEffect(() => {
@@ -171,9 +173,11 @@ export default function Landing({ onStart, progress }) {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
+  // Cagnotte réelle (table community_goals, lecture publique). Rien d'inventé si elle est vide.
   useEffect(() => {
-    const t = setInterval(() => setCurrentTestimonial((c) => (c + 1) % TESTIMONIALS.length), 5000);
-    return () => clearInterval(t);
+    let cancelled = false;
+    getCommunityGoal().then((g) => { if (!cancelled) setCommunityGoal(g); });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -207,7 +211,7 @@ export default function Landing({ onStart, progress }) {
           </div>
           <div className="hidden md:flex items-center gap-6 text-sm text-gray-600">
             <a href="#parcours" className="hover:text-red-600 transition-colors">Parcours</a>
-            <a href="#temoignages" className="hover:text-red-600 transition-colors">Témoignages</a>
+            <a href="#objectifs" className="hover:text-red-600 transition-colors">Objectifs</a>
             <a href="#impact" className="hover:text-red-600 transition-colors">Impact</a>
           </div>
           <button onClick={onStart} className="btn-primary px-5 py-2.5 rounded-xl text-white text-sm font-bold shadow-md">
@@ -227,7 +231,7 @@ export default function Landing({ onStart, progress }) {
             <div style={{ opacity: heroOpacity, transform: `translateY(${heroTranslate}px)` }}>
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 border border-red-200 text-xs font-bold text-red-700 mb-5 anim-fadeUp">
                 <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                🇨🇮 Fait en Côte d'Ivoire · Gratuit pour tous
+                🇨🇮 Fait en Côte d'Ivoire · Leçons gratuites pour tous
               </div>
 
               <h1 className="text-4xl md:text-6xl font-bold text-gray-900 leading-[1.1] mb-5 anim-fadeUp delay-1">
@@ -253,7 +257,7 @@ export default function Landing({ onStart, progress }) {
               </div>
 
               <div className="flex items-center gap-5 anim-fadeUp delay-4">
-                <div className="flex -space-x-2">
+                <div className="flex -space-x-2" aria-hidden="true">
                   {["🦁", "🐼", "🎓", "🥷", "🐉"].map((e, i) => (
                     <div key={i} className="w-9 h-9 rounded-full bg-gradient-to-br from-red-100 to-orange-100 border-2 border-white flex items-center justify-center text-lg shadow">
                       {e}
@@ -261,8 +265,8 @@ export default function Landing({ onStart, progress }) {
                   ))}
                 </div>
                 <div className="text-sm">
-                  <div className="font-bold text-gray-900">+2 400 apprenants</div>
-                  <div className="text-gray-500 text-xs">rejoignent chaque mois · 4.9 ⭐</div>
+                  <div className="font-bold text-gray-900">Rejoins les premiers apprenants</div>
+                  <div className="text-gray-500 text-xs">Lancement 2026 · tes retours façonnent l'app</div>
                 </div>
               </div>
             </div>
@@ -355,8 +359,8 @@ export default function Landing({ onStart, progress }) {
                 <span className="text-gradient-red">« bonjour » en conversation</span>
               </h2>
               <p className="text-gray-600 max-w-2xl mx-auto">
-                Comme Awa, comme Yao, comme des milliers d'Ivoiriens — tu vas découvrir que le chinois
-                n'est pas si difficile quand on apprend avec le bon rythme et la bonne méthode.
+                Tu vas découvrir que le chinois n'est pas si difficile quand on apprend avec le bon rythme
+                et la bonne méthode : un peu chaque jour, à voix haute, en jouant.
               </p>
             </div>
           </Reveal>
@@ -451,45 +455,36 @@ export default function Landing({ onStart, progress }) {
         </div>
       </section>
 
-      {/* ============ TÉMOIGNAGES ============ */}
-      <section id="temoignages" className="py-20 px-4">
-        <div className="max-w-4xl mx-auto">
+      {/* ============ OBJECTIFS ============ */}
+      <section id="objectifs" className="py-20 px-4">
+        <div className="max-w-6xl mx-auto">
           <Reveal>
             <div className="text-center mb-12">
-              <span className="text-sm font-bold text-red-600 uppercase tracking-widest">Ils ont commencé comme toi</span>
+              <span className="text-sm font-bold text-red-600 uppercase tracking-widest">Au bout du parcours HSK 1</span>
               <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mt-3">
-                Des histoires qui <span className="text-gradient-red">changent des vies</span>
+                Ce que <span className="text-gradient-red">tu sauras faire</span>
               </h2>
             </div>
           </Reveal>
 
-          <div className="relative bg-white rounded-3xl shadow-xl p-8 md:p-12 border border-gray-100">
-            <div className="text-5xl text-red-200 absolute top-6 left-8 font-serif">"</div>
-            <div key={currentTestimonial} className="anim-fadeIn">
-              <p className="text-lg md:text-xl text-gray-700 leading-relaxed mb-6 italic">
-                {TESTIMONIALS[currentTestimonial].quote}
-              </p>
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-full bg-gradient-to-br from-red-100 to-orange-100 flex items-center justify-center text-2xl">
-                  {TESTIMONIALS[currentTestimonial].avatar}
+          <div className="grid md:grid-cols-3 gap-6">
+            {GOALS.map((g, i) => (
+              <Reveal key={i} delay={i * 0.15}>
+                <div className="card-hover bg-white rounded-3xl p-7 border border-gray-100 shadow-lg h-full">
+                  <div className="text-4xl mb-4">{g.icon}</div>
+                  <h3 className="text-xl font-bold text-gray-900 mb-2">{g.title}</h3>
+                  <p className="text-sm text-gray-600 leading-relaxed mb-4">{g.desc}</p>
+                  <div className="text-lg font-bold text-red-600">{g.zh}</div>
                 </div>
-                <div>
-                  <div className="font-bold text-gray-900">{TESTIMONIALS[currentTestimonial].name}</div>
-                  <div className="text-sm text-gray-500">{TESTIMONIALS[currentTestimonial].role}</div>
-                  <div className="text-yellow-500 text-sm mt-0.5">{"⭐".repeat(5)}</div>
-                </div>
-              </div>
-            </div>
-            <div className="flex justify-center gap-2 mt-8">
-              {TESTIMONIALS.map((_, i) => (
-                <button
-                  key={i}
-                  onClick={() => setCurrentTestimonial(i)}
-                  className={`h-2 rounded-full transition-all ${i === currentTestimonial ? "w-8 bg-red-500" : "w-2 bg-gray-300"}`}
-                />
-              ))}
-            </div>
+              </Reveal>
+            ))}
           </div>
+
+          <Reveal delay={0.3}>
+            <p className="text-center text-sm text-gray-500 mt-10">
+              Tu testes YǔLù ? Ton témoignage pourrait être le premier publié ici. ✍️
+            </p>
+          </Reveal>
         </div>
       </section>
 
@@ -507,8 +502,8 @@ export default function Landing({ onStart, progress }) {
                 <span className="text-gradient-red">nourrit un futur.</span>
               </h2>
               <p className="text-gray-300 max-w-2xl mx-auto leading-relaxed">
-                15% de nos revenus soutiennent le programme <b>Sauvons Nos Vies</b> de la VIE Foundation :
-                santé, éducation, solutions durables et culture. Apprendre devient un acte solidaire.
+                <b>15 % de notre chiffre d'affaires</b> est reversé au programme <b>Sauvons Nos Vies</b> de la
+                VIE Foundation : santé, éducation, solutions durables et culture. Apprendre devient un acte solidaire.
               </p>
             </div>
           </Reveal>
@@ -530,9 +525,19 @@ export default function Landing({ onStart, progress }) {
               <div className="inline-flex items-center gap-3 px-6 py-4 rounded-2xl bg-white/5 border border-white/10">
                 <span className="text-3xl">🤝</span>
                 <div className="text-left">
-                  <div className="font-bold">Cagnotte communautaire en direct</div>
+                  <div className="font-bold">
+                    {communityGoal?.title || "Cagnotte communautaire"}
+                  </div>
                   <div className="text-sm text-gray-400">
-                    Déjà <b className="text-rose-400">{(progress?.pot || 0) + 128} pièces Sagesse</b> offertes par la communauté
+                    {communityGoal && communityGoal.current_amount_fcfa > 0 ? (
+                      <>
+                        <b className="text-rose-400">{communityGoal.current_amount_fcfa.toLocaleString("fr-FR")} FCFA</b>
+                        {" "}collectés sur {communityGoal.target_amount_fcfa.toLocaleString("fr-FR")} FCFA
+                        {communityGoal.contributor_count > 0 && <> · {communityGoal.contributor_count} contributeur{communityGoal.contributor_count > 1 ? "s" : ""}</>}
+                      </>
+                    ) : (
+                      <>Sois parmi les premiers à soutenir <b className="text-rose-400">Sauvons Nos Vies</b></>
+                    )}
                   </div>
                 </div>
               </div>
@@ -552,13 +557,14 @@ export default function Landing({ onStart, progress }) {
             </h2>
             <p className="text-gray-600 mb-8 max-w-xl mx-auto leading-relaxed">
               Rejoins YǔLù 语路, apprends à ton rythme, et fais partie de cette génération ivoirienne
-              qui parle au monde. Gratuit, sans carte bancaire, pour toujours.
+              qui parle au monde. Les leçons sont gratuites, sans carte bancaire. Le Prof IA illimité est
+              disponible en option avec un Pass, et 15 % de chaque franc soutient Sauvons Nos Vies.
             </p>
             <button onClick={onStart} className="btn-primary px-10 py-5 rounded-2xl text-white font-bold text-lg shadow-2xl anim-pulse-glow">
               🚀 Commencer la Leçon 1 maintenant
             </button>
             <div className="mt-5 text-xs text-gray-400">
-              ✓ Aucune inscription requise · ✓ Fonctionne hors ligne · ✓ Installable sur ton téléphone
+              ✓ Aucune inscription requise · ✓ Leçons disponibles hors ligne · ✓ Installable sur ton téléphone
             </div>
           </Reveal>
         </div>
@@ -572,7 +578,7 @@ export default function Landing({ onStart, progress }) {
             <span>YǔLù 语路 — Campus chinois HSK</span>
           </div>
           <div className="text-center md:text-right">
-            <div>Propulsé par <b className="text-gray-700">Kimatey Enterprise</b> · 加油！</div>
+            <div>Propulsé par <b className="text-gray-700">Kimatey Enterprise</b> · 15 % reversés à Sauvons Nos Vies · 加油！</div>
             <div className="text-xs mt-1">« Chaque mot compte. Chaque vie mérite un futur. » ❤️</div>
           </div>
         </div>
