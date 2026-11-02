@@ -164,6 +164,11 @@ export async function getProfile(userId) {
 export async function saveDonationToCloud(donation) {
   if (!supabase) return { ok: false, error: "Supabase non configuré" };
   try {
+    // Rattache le don au compte connecté (badges, mur des soutiens, impact)
+    if (!donation.user_id) {
+      const { data: u } = await supabase.auth.getUser();
+      if (u?.user?.id) donation = { ...donation, user_id: u.user.id };
+    }
     const { data, error } = await supabase.from("donations").insert(donation);
     if (error) {
       console.warn("Erreur don:", error.message);
