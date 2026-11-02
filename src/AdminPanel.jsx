@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import Studio from "./Studio.jsx";
+import { supabase } from "./supabase.js";
 
 const ADMIN_PIN = "2026";
 const CATALOG_KEY = "hsk1-catalog-v1";
@@ -22,6 +23,7 @@ function saveSettings(s) {
 export default function AdminPanel({ progress, setDonor, setGoal, addXp, onExit }) {
   const [pinInput, setPinInput] = useState("");
   const [authed, setAuthed] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [section, setSection] = useState("stats");
   const [toast, setToast] = useState("");
   const [settings, setSettings] = useState(getSettings());
@@ -34,6 +36,41 @@ export default function AdminPanel({ progress, setDonor, setGoal, addXp, onExit 
   const persistCatalog = (next) => {
     setCatalog(next);
     try { localStorage.setItem(CATALOG_KEY, JSON.stringify(next)); } catch (e) {}
+  };
+
+  // 🔒 Option B : 1) PIN, puis 2) compte Supabase administrateur.
+  // is_admin() (côté base) accepte profiles.is_admin = true OU un email listé dans app_config.admin_emails.
+  const checkAdmin = async () => {
+    if (checking) return;
+    if (pinInput !== ADMIN_PIN) {
+      notify("Code PIN incorrect");
+      setPinInput("");
+      return;
+    }
+    setChecking(true);
+    try {
+      if (!supabase) { notify("Connecte-toi d'abord"); return; }
+      const { data: { user } = {} } = await supabase.auth.getUser();
+      if (!user) { notify("Connecte-toi d'abord"); return; }
+
+      let isAdmin = false;
+      const { data: rpcResult, error: rpcError } = await supabase.rpc("is_admin");
+      if (!rpcError) {
+        isAdmin = rpcResult === true;
+      } else {
+        // Repli si la fonction is_admin() n'est pas disponible
+        const { data: profile } = await supabase
+          .from("profiles").select("is_admin").eq("id", user.id).single();
+        isAdmin = profile?.is_admin === true;
+      }
+
+      if (!isAdmin) { notify("Ce compte n'a pas les droits administrateur"); return; }
+      setAuthed(true);
+    } catch (e) {
+      notify("Vérification impossible, réessaie");
+    } finally {
+      setChecking(false);
+    }
   };
 
   // ============================== ÉCRAN DE VERROUILLAGE ==============================
@@ -60,10 +97,7 @@ export default function AdminPanel({ progress, setDonor, setGoal, addXp, onExit 
               value={pinInput}
               onChange={(e) => setPinInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  if (pinInput === ADMIN_PIN) setAuthed(true);
-                  else { notify("Code incorrect"); setPinInput(""); }
-                }
+                if (e.key === "Enter") checkAdmin();
               }}
               placeholder="• • • •"
               className="w-full px-4 py-4 rounded-xl border-2 border-gray-300 text-center tracking-[0.5em] text-2xl font-bold outline-none focus:border-red-500"
@@ -77,13 +111,11 @@ export default function AdminPanel({ progress, setDonor, setGoal, addXp, onExit 
             )}
 
             <button
-              onClick={() => {
-                if (pinInput === ADMIN_PIN) setAuthed(true);
-                else { notify("Code incorrect"); setPinInput(""); }
-              }}
-              className="mt-4 w-full py-3.5 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800 transition-colors"
+              onClick={checkAdmin}
+              disabled={checking}
+              className="mt-4 w-full py-3.5 rounded-xl bg-gray-900 text-white font-bold hover:bg-gray-800 transition-colors disabled:opacity-60"
             >
-              Accéder au studio
+              {checking ? "Vérification…" : "Accéder au studio"}
             </button>
 
             <button
@@ -441,7 +473,9 @@ export default function AdminPanel({ progress, setDonor, setGoal, addXp, onExit 
               </p>
               <p className="text-xs text-gray-500">
                 Pour changer le PIN, modifie la constante <code className="bg-white px-1 rounded">ADMIN_PIN</code> dans le code source
-                (<code className="bg-white px-1 rounded">src/AdminPanel.jsx</code>).
+                (<code className="bg-white px-1 rounded">src/AdminPanel.jsx</code>). Après le PIN, l'accès exige aussi un compte
+                Supabase administrateur (<code className="bg-white px-1 rounded">is_admin = true</code> ou email dans
+                <code className="bg-white px-1 rounded">app_config.admin_emails</code>).
               </p>
             </div>
 

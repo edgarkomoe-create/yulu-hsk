@@ -5,6 +5,11 @@ import Landing from "./Landing.jsx";
 import Onboarding from "./Onboarding.jsx";
 import AuthScreen from "./AuthScreen.jsx";
 import AdminPanel from "./AdminPanel.jsx";
+import MonCap from "./views/MonCap.jsx";
+import Pass from "./views/Pass.jsx";
+import Solidarite from "./views/Solidarite.jsx";
+import Certification from "./views/Certification.jsx";
+import { askAI } from "./lib/cloud.js";
 import {
   supabase,
   getCurrentUser,
@@ -1066,6 +1071,10 @@ const NAV = [
   ["express", "⏱️ Express"],
   ["jeux", "🎮 Jeux"],
   ["prof", "🧑‍🏫 Prof IA"],
+  ["cap", "🎯 Mon Cap"],
+  ["pass", "🎫 Pass"],
+  ["certif", "🎓 Certification"],
+  ["solidarite", "🤝 Solidarité"],
   ["fiches", "📖 Fiches"],
   ["quiz", "🎯 Quiz"],
   ["oral", "🎧 Oral"],
@@ -2446,7 +2455,21 @@ function Jeux({ progress, addXp, addCoins, buyAvatar }) {
   );
 }
 
-function ProfIA({ progress, aiUsedToday, registerAI }) {
+const AGENT_CHOICES = [
+  ["", "🤖 Auto (recommandé)"],
+  ["prof", "🧑‍🏫 Grammaire"],
+  ["tons", "🎵 Prononciation"],
+  ["vocab", "🧠 Vocabulaire"],
+  ["ecriture", "✍️ Écriture"],
+  ["culture", "🏮 Culture"],
+  ["examen", "📝 Examen HSK"],
+  ["carriere", "💼 Carrière"],
+  ["coach", "🔥 Motivation"],
+];
+
+function ProfIA({ progress, aiUsedToday, registerAI, cloudUser, onLogin }) {
+  const [agentChoice, setAgentChoice] = useState("");
+  const [serverQuota, setServerQuota] = useState(null);
   const [key, setKey] = useState(() => {
     try { return localStorage.getItem(GEMINI_KEY_STORE) || ""; } catch (e) { return ""; }
   });
@@ -2458,7 +2481,8 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
   ]);
   const chatEndRef = useRef(null);
   const freeQuota = getSettings().aiFreePerDay || FREE_AI_PER_DAY;
-  const limitReached = !progress.donor && aiUsedToday >= freeQuota;
+  const serverLimit = !!cloudUser && serverQuota && serverQuota.used >= serverQuota.quota;
+  const limitReached = cloudUser ? serverLimit : (!progress.donor && aiUsedToday >= freeQuota);
 
   const scrollToBottom = () => { try { if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: "smooth" }); } catch (e) {} };
 
@@ -2472,7 +2496,19 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
     setTimeout(scrollToBottom, 50);
 
     let reply = null;
-    if (key.trim()) {
+    let agentInfo = null;
+    if (cloudUser) {
+      const hist = messages.slice(-8).map((m) => ({ role: m.role === "user" ? "user" : "model", text: m.text }));
+      const r = await askAI({ message: text, agent: agentChoice || undefined, history: hist, context: { level: "HSK1" } });
+      if (r.ok) { reply = r.reply; agentInfo = r.agent; setServerQuota(r.quota); }
+      else if (r.code === "quota") {
+        setServerQuota(r.quota || null);
+        setMessages((m) => [...m, { role: "prof", text: "🎓 " + (r.message || "Quota atteint.") + " Prends un Pass (onglet 🎫 Pass) pour continuer." }]);
+        setBusy(false);
+        return;
+      }
+    }
+    if (!reply && key.trim()) {
       try {
         const history = messages.slice(-8).map((m) => ({
           role: m.role === "user" ? "user" : "model",
@@ -2492,7 +2528,7 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
     if (!reply) reply = offlineProfAnswer(text);
 
     registerAI();
-    setMessages((m) => [...m, { role: "prof", text: reply }]);
+    setMessages((m) => [...m, { role: "prof", text: reply, agent: agentInfo }]);
     setBusy(false);
     setTimeout(scrollToBottom, 50);
   };
@@ -2506,12 +2542,28 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
         <div className="flex-1">
           <div className="font-bold text-gray-900">李老师 · Professeur IA</div>
           <div className="text-xs text-gray-500">
-            {progress.donor ? (<span className="text-rose-600 font-bold">❤️ Premium — illimité</span>) : (<span>Restantes : <b>{Math.max(0, freeQuota - aiUsedToday)} / {freeQuota}</b></span>)}
+            {cloudUser ? (
+              serverQuota
+                ? (serverQuota.quota >= 999999 ? <span className="text-rose-600 font-bold">❤️ Illimité</span> : <span>Aujourd'hui : <b>{serverQuota.used} / {serverQuota.quota}</b></span>)
+                : <span>Connecté · quota géré par le serveur</span>
+            ) : progress.donor ? (<span className="text-rose-600 font-bold">❤️ Premium — illimité</span>) : (<span>Restantes : <b>{Math.max(0, freeQuota - aiUsedToday)} / {freeQuota}</b></span>)}
           </div>
         </div>
-        <button onClick={() => setShowKey((s) => !s)} className="px-3 py-1.5 rounded-full bg-white border border-indigo-300 text-xs font-medium text-indigo-700 hover:bg-indigo-100">⚙️ Clé API {key ? "✓" : ""}</button>
+        {cloudUser ? (
+          <select value={agentChoice} onChange={(e) => setAgentChoice(e.target.value)} className="px-2 py-1.5 rounded-full bg-white border border-indigo-300 text-xs font-medium text-indigo-700">
+            {AGENT_CHOICES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        ) : (
+          <button onClick={() => setShowKey((s) => !s)} className="px-3 py-1.5 rounded-full bg-white border border-indigo-300 text-xs font-medium text-indigo-700 hover:bg-indigo-100">⚙️ Clé API {key ? "✓" : ""}</button>
+        )}
       </div>
-      {showKey && (
+      {!cloudUser && (
+        <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-800 flex flex-wrap items-center gap-2">
+          <span>💡 Connecte-toi : le professeur IA fonctionne sans clé API, avec 8 agents spécialisés.</span>
+          {onLogin && <button onClick={onLogin} className="px-3 py-1 rounded-full bg-indigo-600 text-white font-bold">Se connecter</button>}
+        </div>
+      )}
+      {!cloudUser && showKey && (
         <div className="p-4 rounded-2xl border border-gray-300 bg-white text-sm">
           <p className="text-gray-600 mb-2">Colle ta clé API <b>Google Gemini</b> (gratuite sur aistudio.google.com).</p>
           <div className="flex gap-2">
@@ -2523,7 +2575,10 @@ function ProfIA({ progress, aiUsedToday, registerAI }) {
       <div className="p-4 rounded-2xl border border-gray-200 bg-white shadow-sm space-y-3">
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-            <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-red-600 text-white rounded-br-sm" : "bg-gray-100 text-gray-800 rounded-bl-sm"}`}>{m.text}</div>
+            <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-red-600 text-white rounded-br-sm" : "bg-gray-100 text-gray-800 rounded-bl-sm"}`}>
+              {m.agent && <div className="text-[10px] font-bold text-indigo-600 mb-1">{m.agent.emoji} {m.agent.name}</div>}
+              {m.text}
+            </div>
           </div>
         ))}
         {busy && (<div className="flex justify-start"><div className="px-4 py-2.5 rounded-2xl bg-gray-100 text-sm text-gray-500">李老师 réfléchit… ✍️</div></div>)}
@@ -3137,7 +3192,11 @@ export default function App() {
       {view === "progres" && <Progres progress={progress} setGoal={setGoal} />}
       {view === "express" && <Express addXp={addXp} addCoins={addCoins} unlockedLessons={unlockedLessons} />}
       {view === "jeux" && <Jeux progress={progress} addXp={addXp} addCoins={addCoins} buyAvatar={buyAvatar} />}
-      {view === "prof" && <ProfIA progress={progress} aiUsedToday={aiUsedToday} registerAI={registerAI} />}
+      {view === "prof" && <ProfIA progress={progress} aiUsedToday={aiUsedToday} registerAI={registerAI} cloudUser={cloudUser} onLogin={() => setAppMode("auth")} />}
+      {view === "cap" && <MonCap user={cloudUser} progress={progress} lessonsCount={ALL_LESSONS.length} onLogin={() => setAppMode("auth")} />}
+      {view === "pass" && <Pass user={cloudUser} onLogin={() => setAppMode("auth")} />}
+      {view === "certif" && <Certification user={cloudUser} quiz={ALL_QUIZ} onLogin={() => setAppMode("auth")} />}
+      {view === "solidarite" && <Solidarite user={cloudUser} onLogin={() => setAppMode("auth")} />}
       {view === "don" && <Don progress={progress} setDonor={setDonor} addDonation={addDonation} donateCoins={donateCoins} />}
       {view === "pronon" && <Prononciation addXp={addXp} addCoins={addCoins} unlockedLessons={unlockedLessons} />}
 
